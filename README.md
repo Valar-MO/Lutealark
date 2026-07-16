@@ -123,6 +123,103 @@ npm run build
 
 - 已完成 OpenTrek 创建会话与聊天代理
 - 已完成意图与元数据透传
-- 已完成周期计算基础接口
+- 已完成周期计算接口、周期设置页面与状态展示
+- 已完成周期设置本地保存
+- 已完成后端可信周期计算并将周期状态注入 OpenTrek
+- 已完成任务、周期、情绪三个核心 RAG 检索分支
+- 已完成 OpenTrek 输入标准化节点，兼容画布文本调试与后端 JSON 请求
+- 已完成周期状态驱动的低压力回复 Prompt
 - 已完成响应式聊天前端
-- 下一步：周期设置与周期状态页面
+- 下一步：环境支持、呼吸训练和感受记录模块
+
+## 周期感知数据流
+
+前端只向后端提交末次月经日期和平均周期长度，不直接决定周期阶段或能量值：
+
+```text
+周期设置页面
+→ POST /api/workflow/cycle
+→ 后端计算并展示周期状态
+→ 浏览器 localStorage 保存周期设置
+→ 聊天请求携带 cycleSettings
+→ 后端重新计算可信周期状态
+→ 注入 OpenTrek message.metadata，并将同一组字段封装进 message.text JSON
+```
+
+注入智能体的周期字段包括：
+
+- `currentPhase`
+- `phaseName`
+- `isBufferMode`
+- `dayOfCycle`
+- `daysToNextPeriod`
+- `energyValue`
+- `cycleLength`
+
+由于当前 OpenTrek V3.2.0 画布没有明确暴露入站 `message.metadata`，后端会把
+用户输入与周期字段同时封装为以下 `message.text`：
+
+```json
+{
+  "input": "用户原始消息",
+  "currentPhase": "luteal_late",
+  "phaseName": "黄体晚期",
+  "isBufferMode": true,
+  "dayOfCycle": 25,
+  "daysToNextPeriod": 4,
+  "energyValue": 2,
+  "cycleLength": 28
+}
+```
+
+## OpenTrek 工作流配置
+
+当前工作流的核心链路为：
+
+```text
+开始
+→ 输入标准化（脚本任务）
+→ 意图识别
+→ 条件分支
+├─ task_difficulty → 文档检索 → 任务降级回复 → 结果渲染
+├─ cycle_question → 文档检索 → 周期解释回复 → 结果渲染
+├─ emotion_support → 文档检索 → 情绪支持回复 → 结果渲染
+├─ safety_crisis → 危机回应 → 结果渲染
+└─ smalltalk → 通用回复 → 结果渲染
+```
+
+输入标准化节点接收“开始 → 用户输入”，并同时兼容两种输入：
+
+- 画布调试传入的普通文本：直接作为 `userText`。
+- 后端传入的 JSON 文本：解析出 `userText` 和全部周期字段。
+
+后续节点统一引用输入标准化节点输出的：
+
+- `userText`
+- `currentPhase`
+- `phaseName`
+- `isBufferMode`
+- `dayOfCycle`
+- `daysToNextPeriod`
+- `energyValue`
+- `cycleLength`
+- `hasCycleData`
+
+知识库使用 `LutealPhase_Buffer_ADHD_v1`，当前检索配置为：
+
+```text
+检索策略：向量检索
+最大召回条数：5
+最低召回分数：0.75
+```
+
+任务、周期和情绪回复节点分别引用对应的检索结果与周期状态。危机回应不经过普通 RAG 分支，且不能因周期状态降低安全等级。
+
+结果渲染节点的“结果回调 URL”应保持未配置。选择“引用”但不指定 URL 会导致结果渲染长时间等待并最终失败。
+
+## 当前验证状态
+
+- 后端周期计算、周期字段防伪造和 OpenTrek JSON 封装已有自动化测试。
+- 前端已验证周期设置、状态展示和周期感知聊天调用。
+- 平台已验证任务 RAG 召回和周期分支端到端回复。
+- 知识库阈值精调、10 条 Query 召回率评测和前端引用展示留待后续完成。

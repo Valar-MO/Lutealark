@@ -10,8 +10,34 @@ describe("OpenTrek agent client", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("calculates trusted cycle metadata and removes spoofed values", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T12:00:00Z"));
+    const { buildAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    const metadata = buildAgentMetadata({
+      sessionCode: "session-1",
+      message: "今天很难开始",
+      metadata: { intentHint: "task", energyValue: 10 },
+      cycleSettings: { lastPeriodDate: "2026-07-01", cycleLength: 28 },
+      attachments: [],
+    });
+
+    expect(metadata).toEqual({
+      intentHint: "task",
+      currentPhase: "luteal_early",
+      phaseName: "黄体早期",
+      isBufferMode: false,
+      dayOfCycle: 16,
+      daysToNextPeriod: 13,
+      energyValue: 6,
+      cycleLength: 28,
+    });
   });
 
   it("runs an agent and normalizes text and metadata", async () => {
@@ -60,10 +86,41 @@ describe("OpenTrek agent client", () => {
       delta: true,
       sessionId: "session-1",
       message: {
-        text: "我不知道怎么开始",
+        text: JSON.stringify({
+          input: "我不知道怎么开始",
+          currentPhase: null,
+          phaseName: null,
+          isBufferMode: false,
+          dayOfCycle: null,
+          daysToNextPeriod: null,
+          energyValue: null,
+          cycleLength: null,
+        }),
         metadata: {},
         attachments: [],
       },
+    });
+  });
+
+  it("packs user input and calculated cycle state into the workflow text", async () => {
+    const { buildAgentInputText } = await import("../src/clients/opentrek.js");
+    expect(JSON.parse(buildAgentInputText("帮我开始", {
+      currentPhase: "luteal_late",
+      phaseName: "黄体晚期",
+      isBufferMode: true,
+      dayOfCycle: 25,
+      daysToNextPeriod: 4,
+      energyValue: 2,
+      cycleLength: 28,
+    }))).toEqual({
+      input: "帮我开始",
+      currentPhase: "luteal_late",
+      phaseName: "黄体晚期",
+      isBufferMode: true,
+      dayOfCycle: 25,
+      daysToNextPeriod: 4,
+      energyValue: 2,
+      cycleLength: 28,
     });
   });
 });

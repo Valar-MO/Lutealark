@@ -8,6 +8,20 @@ export type ChatResponse = {
   metadata: Record<string, unknown>
 }
 
+export type CycleSettings = {
+  lastPeriodDate: string
+  cycleLength: number
+}
+
+export type CycleResult = {
+  currentPhase: string
+  phaseName: string
+  isBufferMode: boolean
+  dayOfCycle: number
+  daysToNextPeriod: number
+  energyValue: number
+}
+
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 let sessionPromise: Promise<string> | null = null
 
@@ -29,7 +43,11 @@ export function createAgentSession(forceNew = false): Promise<string> {
   return sessionPromise
 }
 
-export function sendAgentMessage(sessionCode: string, message: string) {
+export function sendAgentMessage(
+  sessionCode: string,
+  message: string,
+  cycleSettings?: CycleSettings,
+) {
   return request<ChatResponse>('/api/agent/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -37,8 +55,17 @@ export function sendAgentMessage(sessionCode: string, message: string) {
       sessionCode,
       message,
       metadata: {},
+      cycleSettings,
       attachments: [],
     }),
+  })
+}
+
+export function calculateCycle(settings: CycleSettings) {
+  return request<CycleResult>('/api/workflow/cycle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify(settings),
   })
 }
 

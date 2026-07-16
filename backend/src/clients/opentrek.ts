@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requireOpenTrekConfig } from "../config/env.js";
+import { calculateCycle } from "../services/cycle.js";
 import type {
   CreateAgentSessionInput,
   CreateAgentSessionResult,
@@ -128,6 +129,8 @@ export async function runOpenTrekAgent(
   const config = requireOpenTrekConfig();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.runTimeoutMs);
+  const metadata = buildAgentMetadata(input);
+  const text = buildAgentInputText(input.message, metadata);
 
   try {
     const response = await fetch(`${config.baseUrl}/run`, {
@@ -141,8 +144,8 @@ export async function runOpenTrekAgent(
         delta: true,
         sessionId: input.sessionCode,
         message: {
-          text: input.message,
-          metadata: input.metadata,
+          text,
+          metadata,
           attachments: input.attachments,
         },
       }),
@@ -207,4 +210,51 @@ export async function runOpenTrekAgent(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+const protectedCycleMetadataKeys = new Set([
+  "currentPhase",
+  "phaseName",
+  "isBufferMode",
+  "dayOfCycle",
+  "daysToNextPeriod",
+  "energyValue",
+  "cycleLength",
+]);
+
+export function buildAgentMetadata(
+  input: RunAgentInput,
+): Record<string, unknown> {
+  const metadata = Object.fromEntries(
+    Object.entries(input.metadata).filter(
+      ([key]) => !protectedCycleMetadataKeys.has(key),
+    ),
+  );
+
+  if (!input.cycleSettings) {
+    return metadata;
+  }
+
+  const cycle = calculateCycle(input.cycleSettings);
+  return {
+    ...metadata,
+    ...cycle,
+    cycleLength: input.cycleSettings.cycleLength,
+  };
+}
+
+export function buildAgentInputText(
+  userInput: string,
+  metadata: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    input: userInput,
+    currentPhase: metadata.currentPhase ?? null,
+    phaseName: metadata.phaseName ?? null,
+    isBufferMode: metadata.isBufferMode ?? false,
+    dayOfCycle: metadata.dayOfCycle ?? null,
+    daysToNextPeriod: metadata.daysToNextPeriod ?? null,
+    energyValue: metadata.energyValue ?? null,
+    cycleLength: metadata.cycleLength ?? null,
+  });
 }

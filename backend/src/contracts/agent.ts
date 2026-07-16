@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { cycleSettingsSchema } from "./cycle.js";
 
 export const createAgentSessionInputSchema = z.object({
   memoryUserId: z.string().min(1).max(128).optional(),
@@ -18,6 +19,7 @@ export const runAgentInputSchema = z.object({
   sessionCode: z.string().trim().min(1).max(128),
   message: z.string().trim().min(1).max(20_000),
   metadata: agentMetadataSchema.optional().default({}),
+  cycleSettings: cycleSettingsSchema.optional(),
   attachments: z.array(z.unknown()).optional().default([]),
 });
 
