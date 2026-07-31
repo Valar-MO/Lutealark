@@ -15,11 +15,24 @@ export interface CreateAgentSessionResult {
 
 export const agentMetadataSchema = z.record(z.string(), z.unknown());
 
+export const dailyCheckinSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  energy: z.number().int().min(1).max(5),
+  mood: z.enum(["calm", "anxious", "low", "irritable", "overwhelmed"]),
+  bodyState: z.array(z.string().trim().min(1).max(40)).max(8).default([]),
+  note: z.string().trim().max(200).optional(),
+  shareWithChat: z.boolean().default(true),
+});
+
+export type DailyCheckin = z.infer<typeof dailyCheckinSchema>;
+
 export const runAgentInputSchema = z.object({
   sessionCode: z.string().trim().min(1).max(128),
   message: z.string().trim().min(1).max(20_000),
   metadata: agentMetadataSchema.optional().default({}),
   cycleSettings: cycleSettingsSchema.optional(),
+  dailyCheckin: dailyCheckinSchema.optional(),
+  dailyCheckins: z.array(dailyCheckinSchema).max(30).optional(),
   attachments: z.array(z.unknown()).optional().default([]),
 });
 

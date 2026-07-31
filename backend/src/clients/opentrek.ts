@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { requireOpenTrekConfig } from "../config/env.js";
 import { calculateCycle } from "../services/cycle.js";
+import { buildHistoryContext } from "../services/history.js";
 import type {
   CreateAgentSessionInput,
   CreateAgentSessionResult,
@@ -141,7 +142,7 @@ export async function runOpenTrekAgent(
       },
       body: JSON.stringify({
         stream: false,
-        delta: true,
+        delta: false,
         sessionId: input.sessionCode,
         message: {
           text,
@@ -231,13 +232,30 @@ export function buildAgentMetadata(
     ),
   );
 
+  const checkinMetadata = input.dailyCheckin?.shareWithChat
+    ? {
+        checkinDate: input.dailyCheckin.date,
+        selfReportedEnergy: input.dailyCheckin.energy,
+        mood: input.dailyCheckin.mood,
+        bodyState: input.dailyCheckin.bodyState,
+        checkinNote: input.dailyCheckin.note ?? "",
+      }
+    : {};
+  const historyRecords = input.dailyCheckins ?? (input.dailyCheckin ? [input.dailyCheckin] : []);
+  const historyContext = buildHistoryContext(historyRecords);
+  const historyMetadata = historyContext
+    ? { historyContext: JSON.stringify(historyContext) }
+    : {};
+
   if (!input.cycleSettings) {
-    return metadata;
+    return { ...metadata, ...checkinMetadata, ...historyMetadata };
   }
 
   const cycle = calculateCycle(input.cycleSettings);
   return {
     ...metadata,
+    ...checkinMetadata,
+    ...historyMetadata,
     ...cycle,
     cycleLength: input.cycleSettings.cycleLength,
   };
@@ -256,5 +274,11 @@ export function buildAgentInputText(
     daysToNextPeriod: metadata.daysToNextPeriod ?? null,
     energyValue: metadata.energyValue ?? null,
     cycleLength: metadata.cycleLength ?? null,
+    checkinDate: metadata.checkinDate ?? null,
+    selfReportedEnergy: metadata.selfReportedEnergy ?? null,
+    mood: metadata.mood ?? null,
+    bodyState: metadata.bodyState ?? [],
+    checkinNote: metadata.checkinNote ?? "",
+    historyContext: metadata.historyContext ?? "",
   });
 }

@@ -83,7 +83,7 @@ describe("OpenTrek agent client", () => {
     expect(url).toBe("http://opentrek.test/agent/api/run");
     expect(JSON.parse(String(options.body))).toEqual({
       stream: false,
-      delta: true,
+      delta: false,
       sessionId: "session-1",
       message: {
         text: JSON.stringify({
@@ -95,6 +95,12 @@ describe("OpenTrek agent client", () => {
           daysToNextPeriod: null,
           energyValue: null,
           cycleLength: null,
+          checkinDate: null,
+          selfReportedEnergy: null,
+          mood: null,
+          bodyState: [],
+          checkinNote: "",
+          historyContext: "",
         }),
         metadata: {},
         attachments: [],
@@ -121,6 +127,57 @@ describe("OpenTrek agent client", () => {
       daysToNextPeriod: 4,
       energyValue: 2,
       cycleLength: 28,
+      checkinDate: null,
+      selfReportedEnergy: null,
+      mood: null,
+      bodyState: [],
+      checkinNote: "",
+      historyContext: "",
+    });
+  });
+
+  it("adds a shared daily check-in without replacing cycle metadata", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T12:00:00Z"));
+    const { buildAgentMetadata, buildAgentInputText } = await import("../src/clients/opentrek.js");
+    const metadata = buildAgentMetadata({
+      sessionCode: "session-1",
+      message: "test",
+      metadata: {},
+      cycleSettings: { lastPeriodDate: "2026-07-01", cycleLength: 28 },
+      dailyCheckin: {
+        date: "2026-07-16",
+        energy: 2,
+        mood: "anxious",
+        bodyState: ["fatigue"],
+        note: "hard to start",
+        shareWithChat: true,
+      },
+      dailyCheckins: [
+        {
+          date: "2026-07-16",
+          energy: 2,
+          mood: "anxious",
+          bodyState: ["fatigue"],
+          note: "hard to start",
+          shareWithChat: true,
+        },
+      ],
+      attachments: [],
+    });
+
+    const workflowInput = JSON.parse(buildAgentInputText("test", metadata));
+    expect(workflowInput).toMatchObject({
+      energyValue: 6,
+      selfReportedEnergy: 2,
+      mood: "anxious",
+      bodyState: ["fatigue"],
+      checkinNote: "hard to start",
+    });
+    expect(JSON.parse(workflowInput.historyContext)).toMatchObject({
+      recordCount: 1,
+      energy: { recentAverage: 2, trend: "insufficient_data" },
+      mood: { frequent: ["anxious"] },
     });
   });
 });

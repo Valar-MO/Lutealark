@@ -22,6 +22,15 @@ export type CycleResult = {
   energyValue: number
 }
 
+export type DailyCheckIn = {
+  date: string
+  energy: 1 | 2 | 3 | 4 | 5
+  mood: 'calm' | 'anxious' | 'low' | 'irritable' | 'overwhelmed'
+  bodyState: string[]
+  note?: string
+  shareWithChat: boolean
+}
+
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 let sessionPromise: Promise<string> | null = null
 
@@ -47,6 +56,8 @@ export function sendAgentMessage(
   sessionCode: string,
   message: string,
   cycleSettings?: CycleSettings,
+  dailyCheckin?: DailyCheckIn,
+  dailyCheckins?: DailyCheckIn[],
 ) {
   return request<ChatResponse>('/api/agent/chat', {
     method: 'POST',
@@ -56,6 +67,8 @@ export function sendAgentMessage(
       message,
       metadata: {},
       cycleSettings,
+      dailyCheckin,
+      dailyCheckins,
       attachments: [],
     }),
   })
