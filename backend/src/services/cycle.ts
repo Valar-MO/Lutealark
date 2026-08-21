@@ -1,34 +1,28 @@
 import type { CycleInput, CycleResult } from "../contracts/cycle.js";
+import {
+  businessDateOnly,
+  calendarDayDifference,
+  DateInputError,
+  DEFAULT_BUSINESS_TIME_ZONE,
+} from "./date.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function parseDateOnly(value: string): number {
-  const [year, month, day] = value.split("-").map(Number);
-  const timestamp = Date.UTC(year!, month! - 1, day!);
-  const parsed = new Date(timestamp);
-
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month! - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    throw new Error(`无效日期：${value}`);
-  }
-
-  return timestamp;
+export interface CycleCalculationOptions {
+  now?: Date;
+  timeZone?: string;
 }
 
-function utcToday(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export function calculateCycle(input: CycleInput): CycleResult {
-  const lastPeriod = parseDateOnly(input.lastPeriodDate);
-  const today = parseDateOnly(input.today ?? utcToday());
-  const elapsedDays = Math.floor((today - lastPeriod) / DAY_MS);
+export function calculateCycle(
+  input: CycleInput,
+  options: CycleCalculationOptions = {},
+): CycleResult {
+  const today = input.today ?? businessDateOnly(
+    options.now ?? new Date(),
+    options.timeZone ?? DEFAULT_BUSINESS_TIME_ZONE,
+  );
+  const elapsedDays = calendarDayDifference(today, input.lastPeriodDate);
 
   if (elapsedDays < 0) {
-    throw new Error("末次月经日期不能晚于计算日期");
+    throw new DateInputError("末次月经日期不能晚于计算日期");
   }
 
   const dayOfCycle = (elapsedDays % input.cycleLength) + 1;

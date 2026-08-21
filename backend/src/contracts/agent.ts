@@ -11,13 +11,31 @@ export type CreateAgentSessionInput = z.infer<
 
 export interface CreateAgentSessionResult {
   sessionCode: string;
+  mode?: "online" | "offline";
 }
 
 export const agentMetadataSchema = z.record(z.string(), z.unknown());
 
+export const knowledgeSourceSchema = z.object({
+  sourceId: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(300),
+  url: z.string().url().max(2_000).optional(),
+  chunkId: z.string().trim().max(200).optional(),
+  excerpt: z.string().trim().max(600).optional(),
+  score: z.number().min(0).max(1).optional(),
+});
+
+export type KnowledgeSource = z.infer<typeof knowledgeSourceSchema>;
+
 export const dailyCheckinSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  energy: z.number().int().min(1).max(5),
+  energy: z.union([
+    z.literal(1),
+    z.literal(2),
+    z.literal(3),
+    z.literal(4),
+    z.literal(5),
+  ]),
   mood: z.enum(["calm", "anxious", "low", "irritable", "overwhelmed"]),
   bodyState: z.array(z.string().trim().min(1).max(40)).max(8).default([]),
   note: z.string().trim().max(200).optional(),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { DailyCheckin } from "../src/contracts/agent.js";
 import { buildHistoryContext } from "../src/services/history.js";
 
 const today = new Date("2026-07-29T12:00:00Z");
@@ -55,5 +56,34 @@ describe("history context", () => {
     expect(buildHistoryContext([
       { date: "2026-07-20", energy: 3, mood: "calm", bodyState: [], shareWithChat: true },
     ], today)).toBeNull();
+  });
+
+  it("uses Shanghai midnight for today's record and the seven-day boundary", () => {
+    const atShanghaiMidnight = new Date("2026-08-06T16:00:00Z");
+    const records: DailyCheckin[] = [
+      { date: "2026-08-07", energy: 2, mood: "anxious", bodyState: ["fatigue"], shareWithChat: true },
+      { date: "2026-08-01", energy: 3, mood: "calm", bodyState: [], shareWithChat: true },
+      { date: "2026-07-31", energy: 4, mood: "calm", bodyState: [], shareWithChat: true },
+    ];
+
+    const shanghaiContext = buildHistoryContext(records, atShanghaiMidnight);
+    expect(shanghaiContext).toMatchObject({
+      recordCount: 2,
+      latestCheckinDate: "2026-08-07",
+      mood: { counts: { anxious: 1, calm: 1 } },
+    });
+
+    const utcContext = buildHistoryContext(records, atShanghaiMidnight, "UTC");
+    expect(utcContext).toMatchObject({
+      recordCount: 2,
+      latestCheckinDate: "2026-08-01",
+      mood: { counts: { calm: 2 } },
+    });
+  });
+
+  it("rejects a semantically invalid check-in date", () => {
+    expect(() => buildHistoryContext([
+      { date: "2026-02-30", energy: 3, mood: "calm", bodyState: [], shareWithChat: true },
+    ], today)).toThrow("无效日期");
   });
 });

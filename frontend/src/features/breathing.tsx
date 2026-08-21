@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CycleResult } from '../lib/api'
+import {
+  createBreathingRecord,
+  type BreathingRating,
+  type BreathingRecord,
+} from './breathing-storage'
 
 type BreathingPhase = {
   name: '吸气' | '屏息' | '呼气'
@@ -90,9 +95,15 @@ type BreathingScreen = 'select' | 'guide' | 'complete'
 export function BreathingPage({
   cycleResult,
   onBack,
+  records,
+  onUpsertRecord,
+  onDeleteRecord,
 }: {
   cycleResult: CycleResult | null
   onBack: () => void
+  records: BreathingRecord[]
+  onUpsertRecord: (record: BreathingRecord) => void
+  onDeleteRecord: (recordId: string) => Promise<void>
 }) {
   const recommendedId = cycleResult?.isBufferMode ? 'luteal_gentle' : 'resonance'
   const orderedModes = useMemo(
@@ -101,20 +112,44 @@ export function BreathingPage({
   )
   const [screen, setScreen] = useState<BreathingScreen>('select')
   const [selectedMode, setSelectedMode] = useState<BreathingMode>(orderedModes[0])
-  const [rating, setRating] = useState(0)
+  const [activeRecord, setActiveRecord] = useState<BreathingRecord | null>(null)
+  const [rating, setRating] = useState<BreathingRating | null>(null)
 
   const startMode = (mode: BreathingMode) => {
     setSelectedMode(mode)
-    setRating(0)
+    setActiveRecord(null)
+    setRating(null)
     setScreen('guide')
+  }
+
+  const completeMode = () => {
+    const record = createBreathingRecord(selectedMode)
+    onUpsertRecord(record)
+    setActiveRecord(record)
+    setRating(null)
+    setScreen('complete')
+  }
+
+  const rateCompletedMode = (value: BreathingRating) => {
+    setRating(value)
+    if (!activeRecord) return
+    const updated = { ...activeRecord, rating: value }
+    setActiveRecord(updated)
+    onUpsertRecord(updated)
+  }
+
+  const resetCompletedMode = (nextScreen: BreathingScreen) => {
+    setActiveRecord(null)
+    setRating(null)
+    setScreen(nextScreen)
   }
 
   if (screen === 'guide') {
     return (
       <BreathingGuide
         mode={selectedMode}
-        onStop={() => setScreen('select')}
-        onComplete={() => setScreen('complete')}
+        onStop={() => resetCompletedMode('select')}
+        onComplete={completeMode}
       />
     )
   }
@@ -124,9 +159,9 @@ export function BreathingPage({
       <CompletionView
         mode={selectedMode}
         rating={rating}
-        setRating={setRating}
-        onAgain={() => setScreen('guide')}
-        onChooseAnother={() => setScreen('select')}
+        onRate={rateCompletedMode}
+        onAgain={() => resetCompletedMode('guide')}
+        onChooseAnother={() => resetCompletedMode('select')}
         onBack={onBack}
       />
     )
@@ -152,6 +187,8 @@ export function BreathingPage({
             不需要吸得很深，也不需要做到完美。感到头晕、胸闷或不舒服时，请恢复自然呼吸并停止训练。
           </p>
         </div>
+
+        <BreathingRecordSummary records={records} onDeleteRecord={onDeleteRecord} />
 
         <div className="mt-5 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {orderedModes.map((mode) => {
@@ -329,14 +366,14 @@ function BreathingGuide({
 function CompletionView({
   mode,
   rating,
-  setRating,
+  onRate,
   onAgain,
   onChooseAnother,
   onBack,
 }: {
   mode: BreathingMode
-  rating: number
-  setRating: (rating: number) => void
+  rating: BreathingRating | null
+  onRate: (rating: BreathingRating) => void
   onAgain: () => void
   onChooseAnother: () => void
   onBack: () => void
@@ -354,15 +391,17 @@ function CompletionView({
         <div className="mt-5 rounded-[20px] bg-[#f1f4ee] p-4">
           <p className="text-sm font-medium text-[#596454]">现在的放松程度</p>
           <div className="mt-3 flex justify-center gap-2" aria-label="放松程度评分">
-            {[1, 2, 3, 4, 5].map((value) => (
+            {([1, 2, 3, 4, 5] as const).map((value) => (
               <button
                 key={value}
                 type="button"
                 aria-label={`${value} 分`}
                 aria-pressed={rating === value}
-                onClick={() => setRating(value)}
+                onClick={() => onRate(value)}
                 className={`grid h-10 w-10 place-items-center rounded-full text-base transition ${
-                  value <= rating ? 'bg-[#6c7e64] text-white' : 'bg-white text-[#9aa294] hover:bg-[#e5ebe1]'
+                  rating !== null && value <= rating
+                    ? 'bg-[#6c7e64] text-white'
+                    : 'bg-white text-[#9aa294] hover:bg-[#e5ebe1]'
                 }`}
               >
                 {value}
@@ -383,8 +422,64 @@ function CompletionView({
         <button type="button" onClick={onBack} className="mt-4 text-sm text-[#7d8677] underline decoration-[#b7beb1] underline-offset-4">
           返回聊天
         </button>
-        <p className="mt-3 text-[11px] text-[#a19c94]">训练记录和积分将在后续接入后端后同步。</p>
+        <p className="mt-3 text-[11px] text-[#a19c94]">记录会先保存在本机，并在连接可用时同步。</p>
       </div>
+    </section>
+  )
+}
+
+function BreathingRecordSummary({ records, onDeleteRecord }: { records: BreathingRecord[]; onDeleteRecord: (recordId: string) => Promise<void> }) {
+  const [busyId, setBusyId] = useState('')
+  const [error, setError] = useState('')
+  const totalMinutes = Math.round(
+    records.reduce((total, record) => total + record.durationSeconds, 0) / 60,
+  )
+  const remove = async (record: BreathingRecord) => {
+    if (!window.confirm(`确定删除 ${formatRecordTime(record.completedAt)} 的“${record.modeName}”记录吗？`)) return
+    setBusyId(record.id)
+    setError('')
+    try {
+      await onDeleteRecord(record.id)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '删除记录失败，请稍后再试。')
+    } finally {
+      setBusyId('')
+    }
+  }
+
+  return (
+    <section className="mt-5 rounded-[20px] border border-[#dce2d7] bg-white/65 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium tracking-[.16em] text-[#7c8d72]">PRACTICE HISTORY</p>
+          <p className="mt-1 text-sm text-[#5f6859]">
+            {records.length > 0
+              ? `当前保存 ${records.length} 次·合计 ${totalMinutes} 分钟`
+              : '完整做完一轮后，会在这里留下记录。'}
+          </p>
+        </div>
+        <p className="max-w-xs text-xs leading-5 text-[#918b82]">本机优先·最多 30 条·可删除</p>
+      </div>
+
+      {error && <p className="mt-3 rounded-xl border border-[#e2b7a8] bg-[#fff5f0] px-3 py-2 text-xs text-[#8a5140]" role="alert">{error}</p>}
+
+      {records.length > 0 && (
+        <div className="scrollbar mt-3 grid max-h-64 gap-2 overflow-y-auto pr-1 sm:grid-cols-3">
+          {records.map((record) => (
+            <div key={record.id} className="rounded-2xl bg-[#f5f7f2] px-3 py-2.5">
+              <p className="truncate text-sm font-medium text-[#4f5d49]">{record.modeName}</p>
+              <p className="mt-1 text-xs text-[#858078]">
+                <time dateTime={record.completedAt}>{formatRecordTime(record.completedAt)}</time>
+                {' · '}{formatMinutes(record.durationSeconds)}
+              </p>
+              <p className="mt-1 text-xs text-[#788272]">
+                {record.rating === null ? '还没评分' : `放松程度 ${record.rating}/5`}
+              </p>
+              <button type="button" disabled={busyId === record.id} onClick={() => void remove(record)} className="mt-2 text-xs text-[#965d49] underline decoration-[#d7bbb0] underline-offset-2 disabled:opacity-50">{busyId === record.id ? '正在删除…' : '删除记录'}</button>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   )
 }
@@ -397,6 +492,15 @@ function formatClock(seconds: number) {
   const minutes = Math.floor(seconds / 60)
   const remainder = seconds % 60
   return `${minutes}:${String(remainder).padStart(2, '0')}`
+}
+
+function formatRecordTime(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
 }
 
 function phaseHint(phase: BreathingPhase['name']) {

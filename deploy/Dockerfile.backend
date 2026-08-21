@@ -1,0 +1,47 @@
+FROM node:24-bookworm-slim AS build
+
+WORKDIR /app
+
+# npm resolves file:../packages/contracts from backend/package.json, so the
+# build context must be the repository root rather than backend/ alone.
+COPY backend/package.json backend/package-lock.json ./backend/
+COPY packages/contracts/package.json ./packages/contracts/package.json
+COPY packages/contracts/src ./packages/contracts/src
+
+WORKDIR /app/backend
+RUN npm ci
+
+WORKDIR /app
+COPY backend/src ./backend/src
+COPY backend/scripts ./backend/scripts
+COPY backend/migrations ./backend/migrations
+
+WORKDIR /app/backend
+RUN npm run build
+
+# This target intentionally retains tsx and the TypeScript sources so the
+# one-shot migration service can run the existing migration script.
+FROM build AS migrate
+ENV NODE_ENV=production
+CMD ["npm", "run", "db:migrate"]
+
+FROM node:24-bookworm-slim AS runtime
+
+WORKDIR /app/backend
+ENV NODE_ENV=production
+
+COPY --from=build /app/backend/package.json /app/backend/package-lock.json ./
+COPY --from=build /app/backend/node_modules ./node_modules
+COPY --from=build /app/backend/dist ./dist
+COPY --from=build /app/backend/migrations ./migrations
+COPY --from=build /app/packages/contracts /app/packages/contracts
+
+RUN npm prune --omit=dev
+
+ENV HOST=0.0.0.0
+ENV PORT=3000
+
+EXPOSE 3000
+
+USER node
+CMD ["node", "dist/server.js"]

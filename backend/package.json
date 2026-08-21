@@ -9,22 +9,35 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:opentrek": "tsx scripts/evaluate-opentrek.ts",
+    "eval:opentrek:validate": "tsx scripts/evaluate-opentrek.ts --validate-only",
+    "eval:opentrek:sources": "tsx scripts/evaluate-opentrek-sources.ts",
+    "eval:opentrek:sources:validate": "tsx scripts/evaluate-opentrek-sources.ts --validate-only"
   },
   "dependencies": {
-    "@hono/node-server": "2.0.8",
+    "@hono/node-server": "2.0.10",
+    "@lutealark/contracts": "file:../packages/contracts",
     "@trpc/server": "11.18.0",
     "dotenv": "17.4.2",
-    "hono": "4.12.29",
+    "hono": "4.12.34",
+    "pg": "8.23.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
+    "@types/pg": "8.21.0",
+    "ajv": "^8.18.0",
     "tsx": "4.23.0",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
+  },
+  "overrides": {
+    "nanoid": "3.3.18",
+    "postcss": "8.5.26"
   }
 }

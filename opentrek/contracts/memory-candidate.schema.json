@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lutealark.local/schemas/opentrek/memory-candidate-v1.json",
+  "title": "Consent-gated memory candidate v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidateId", "kind", "summary", "requiresConsent", "sourceTurnHash"],
+  "properties": {
+    "candidateId": { "type": "string", "format": "uuid" },
+    "kind": { "enum": ["preference", "constraint", "long_term_goal"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "requiresConsent": { "const": true },
+    "sourceTurnHash": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "当前用户消息轮次的 SHA-256 十六进制摘要"
+    }
+  }
+}

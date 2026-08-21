@@ -1,4 +1,9 @@
 import type { DailyCheckin } from "../contracts/agent.js";
+import {
+  businessDateOnly,
+  calendarDayDifference,
+  DEFAULT_BUSINESS_TIME_ZONE,
+} from "./date.js";
 
 export type EnergyTrend = "up" | "down" | "stable" | "insufficient_data";
 
@@ -28,6 +33,7 @@ const HISTORY_WINDOW_DAYS = 7;
 export function buildHistoryContext(
   records: readonly DailyCheckin[],
   now = new Date(),
+  timeZone = DEFAULT_BUSINESS_TIME_ZONE,
 ): HistoryContext | null {
   const byDate = new Map<string, DailyCheckin>();
 
@@ -37,13 +43,12 @@ export function buildHistoryContext(
     }
   }
 
-  const todayUtc = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-  );
+  const today = businessDateOnly(now, timeZone);
   const recent = [...byDate.values()]
-    .map((record) => ({ record, daysAgo: calendarDaysAgo(record.date, todayUtc) }))
+    .map((record) => ({
+      record,
+      daysAgo: calendarDayDifference(today, record.date),
+    }))
     .filter(({ daysAgo }) => daysAgo >= 0 && daysAgo < HISTORY_WINDOW_DAYS)
     .sort((left, right) => left.daysAgo - right.daysAgo);
 
@@ -80,14 +85,6 @@ export function buildHistoryContext(
       .slice(0, 3)
       .map(([bodyState]) => bodyState),
   };
-}
-
-function calendarDaysAgo(date: string, todayUtc: number): number {
-  const [year, month, day] = date.split("-").map(Number);
-  if (!year || !month || !day) {
-    return Number.POSITIVE_INFINITY;
-  }
-  return Math.round((todayUtc - Date.UTC(year, month - 1, day)) / 86_400_000);
 }
 
 function weightedAverage(
