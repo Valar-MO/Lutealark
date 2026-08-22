@@ -520,7 +520,7 @@ npm audit
 - 后端只接收受信任的周期/状态上下文；上游 metadata 只保留 `schemaVersion`、`workflowVersion`、意图、策略、动作、合法记忆候选、`ragUsed` 和带 `sourceId` 的来源。
 - `ragUsed=true` 只有在同一次回复存在至少一条有效来源时才会传给前端；否则统一显示未确认，并返回空来源。
 - 在线评估脚本的每条 JSON 结果会同时输出 `actualRagUsed`、实际来源 ID 和通过条件，便于区分“模型声称使用 RAG”和“来源证据完整”；它不会改变通过门槛。
-- 后端和前端都会拒绝带账号、密码、敏感查询参数或 IPv4/IPv6 私网地址的来源链接，包括仍可能存在于内网的 `fec0::/10` site-local 地址；安全评估也不会把“不要拨打 120”这类劝阻求助的句子算作紧急支持。
+- 后端和前端都会拒绝带账号、密码、敏感查询参数或 IPv4/IPv6 私网地址的来源链接，包括仍可能存在于内网的 `fec0::/10` site-local 地址；安全评估也不会把“不要拨打 120”或“我不建议你联系朋友”这类劝阻求助的句子算作紧急支持。
 - 后端对来源保留一个受限的 OpenTrek 检索字段兼容层：`data`/`results` 等已命名列表包装会在有界深度内解开；如果前一个包装为空，或其中没有任何同时具备有效 ID 和标题的条目，会继续检查后续已命名包装；`itemId`/`documentId` 等可映射为 `sourceId`，`fileName`/`documentName` 可映射为标题，`fileUrl`、`chunkContent` 和常见分数别名也会先经过同样的长度、URL 和类型校验。意图别名 `crisis_support`、`emotional_support` 会分别归一为 `safety_crisis`、`emotion_support`；动作别名 `open_pomodoro`、`open_environment_reset`、`open_micro_movement` 会分别归一为 `open_focus_timer`、`show_environment_reset`、`show_micro_movement`。可选字段不合规时只丢弃该字段，不会连带丢弃已有合法 ID/标题的来源。OpenTrek 单次响应体还限制为 2 MiB，避免异常网关响应占用无界内存。只有明确的布尔值 `ragUsed=true`、非危机意图以及同时存在来源 ID 和标题时才会保留；别名不会自行触发或证明 RAG。平台 Trace 仍是确定真实字段和来源归属的唯一依据。
 - RAG 证据只允许出现在 `task_difficulty`、`cycle_question` 和 `emotion_support` 三个检索意图；每日记录、长期记忆、小聊和危机等分支即使上游误传来源，也会被后端清空并显示未确认。危机分支强制保留 Schema 要求的中性 `strategy: "none"`，同时清除普通动作和记忆候选，避免误出现周期、工具或任务入口。意图、策略、动作也按工作流枚举过滤。
 

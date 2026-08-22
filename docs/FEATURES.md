@@ -552,6 +552,7 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - 本机离线 HTTP 冒烟测试实际通过健康检查、数据库、周期计算、Session 创建和任务问答；任务回复明确为 `ragUsed=false`、`sources=[]`。
 - 离线 Session 创建、普通问答、危机优先、动作确认、记忆闭环、跨账号 Session 拒绝、账号导出与删号已完成自动化或真实 HTTP/数据库验证。
 - OpenTrek 路由/安全离线校验：12 条路由、2 条危机、5 条安全样例，状态 `valid`；来源校验状态 `valid_but_not_ready`，Q01–Q10 均等待真实 Trace/sourceId。
+- 危机安全评估会拒绝否定或劝阻紧急渠道、可信任联系人支持的回答，包括在“不建议”后带“你/您”的表达，不以关键词共现代替正向求助建议。
 - OpenTrek 2026-08-22 早先实测曾成功创建在线 Session 并命中 `cycle_question`，但 `ragUsed` 未返回且来源为空；本轮最新应用探测约 11 秒后得到明确的离线 Session，后续周期问题返回 `intent=cycle_question`、`ragUsed=false` 和 0 条来源。`/health/opentrek` 的 `ready` 只表示本机四项配置齐全，不表示 VPN/网关已应答。当前仍不能确认远端知识库或 RAG 来源可用。
 - `ragUsed`/`sources` JSON Schema 回归测试和两项离线 OpenTrek 数据校验均通过；来源集合仍是 `valid_but_not_ready`，这些命令未联网。
 - 内置浏览器插件最终返回空实例列表，因此本次没有完成真实点击、桌面/移动截图或视觉重叠验收。
