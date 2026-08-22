@@ -804,6 +804,12 @@ function isPrivateHostname(hostname: string): boolean {
     || hostname.startsWith("fe9")
     || hostname.startsWith("fea")
     || hostname.startsWith("feb")
+    // Deprecated IPv6 site-local space (fec0::/10) is still routable on
+    // some internal networks and must not become a clickable source link.
+    || hostname.startsWith("fec")
+    || hostname.startsWith("fed")
+    || hostname.startsWith("fee")
+    || hostname.startsWith("fef")
     || hostname.startsWith("fc")
     || hostname.startsWith("fd")
     || hostname.startsWith("::ffff:")

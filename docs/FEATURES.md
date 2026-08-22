@@ -476,7 +476,7 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - 后端兼容一组受限的 OpenTrek 检索字段别名和 `data`/`results` 等有界深度的已命名列表包装；如果前一个包装为空，或其中没有任何同时具备有效 ID 和标题的条目，会继续检查后续包装（例如 `itemId`/`documentId`、`fileName`/`documentName`、`fileUrl`、`chunkContent` 和常见分数字段），先归一化为产品来源合同再校验；意图别名 `crisis_support`、`emotional_support` 会归一为 `safety_crisis`、`emotion_support`，动作别名 `open_pomodoro`、`open_environment_reset`、`open_micro_movement` 会归一为 `open_focus_timer`、`show_environment_reset`、`show_micro_movement`。可选字段不合规时只丢弃该字段，不会连带丢弃已有合法 ID/标题的来源。OpenTrek 单次响应体限制为 2 MiB，避免异常网关响应占用无界内存。必须仍有明确的布尔 `ragUsed=true`、来源 ID 和标题，别名不会推断 RAG。平台 Trace 仍需用于确认真实字段和同次运行的来源归属。
 - RAG 证据仅允许对应 `task_difficulty`、`cycle_question`、`emotion_support` 检索意图；`daily_checkin`、`memory_request`、`smalltalk` 和危机分支会清空误传来源。危机分支强制保留 Schema 要求的中性 `strategy: "none"`，同时清除普通动作和记忆候选，避免误出现周期、工具或任务入口。上游意图、策略和动作不在工作流枚举中的值也会被丢弃。
 - 恢复已保存对话时会在前端再次执行同一意图白名单；历史 metadata 不能仅凭 `ragUsed=true` 和来源字段绕过三类检索意图条件。
-- 可点击链接必须是安全的 HTTPS 地址，不接受账号密码、私网主机或带 token/signature 等敏感查询的 URL。
+- 可点击链接必须是安全的 HTTPS 地址，不接受账号密码、私网主机或带 token/signature 等敏感查询的 URL；IPv6 `fec0::/10` site-local 地址也会被后端和前端拒绝。
 - 离线、非 RAG 与危机分支必须返回空来源。
 - 平台回显的记忆上下文、内部策略字段和不可信 metadata 不会持久化或展示。
 - 不得暴露内网地址、临时签名 URL 或真实用户对话。
@@ -546,7 +546,7 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 
 截至 2026-08-22（本轮代码与文档调整后）：
 
-- 后端 Vitest 普通模式：19 个文件通过、1 个文件按环境跳过，260 个测试通过、4 个测试跳过（4 个均来自数据库测试文件；共 264 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，20 个文件、264 个测试全部通过。前端 Vitest：15 个测试文件、77 个测试全部通过。
+- 后端 Vitest 普通模式：19 个文件通过、1 个文件按环境跳过，261 个测试通过、4 个测试跳过（4 个均来自数据库测试文件；共 265 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，20 个文件、265 个测试全部通过。前端 Vitest：15 个测试文件、78 个测试全部通过。
 - 后端 `npm run check`、`npm run build`，前端 `npm run lint`、`npm run build` 均通过；前后端 `npm audit` 均报告 0 个已知漏洞。
 - 全新临时 PostgreSQL 数据库的 001–005 迁移全部成功；已有数据库若校验和不一致会被保护性停止，不自动修复。
 - 本机离线 HTTP 冒烟测试实际通过健康检查、数据库、周期计算、Session 创建和任务问答；任务回复明确为 `ragUsed=false`、`sources=[]`。

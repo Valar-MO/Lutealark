@@ -185,7 +185,7 @@ function isSafeHttpUrl(value: string) {
 
 function isPrivateHostname(hostname: string) {
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) return true
-  if (hostname === '::' || hostname === '::1' || hostname.startsWith('::ffff:') || hostname.startsWith('fe8') || hostname.startsWith('fe9') || hostname.startsWith('fea') || hostname.startsWith('feb') || hostname.startsWith('fc') || hostname.startsWith('fd')) return true
+  if (hostname === '::' || hostname === '::1' || hostname.startsWith('::ffff:') || hostname.startsWith('fe8') || hostname.startsWith('fe9') || hostname.startsWith('fea') || hostname.startsWith('feb') || hostname.startsWith('fec') || hostname.startsWith('fed') || hostname.startsWith('fee') || hostname.startsWith('fef') || hostname.startsWith('fc') || hostname.startsWith('fd')) return true
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname)
   if (!ipv4) return false
   const octets = ipv4.slice(1).map(Number)

@@ -83,6 +83,7 @@ describe('chat metadata', () => {
     'https://100.64.0.8/file',
     'https://[::1]/file',
     'https://[fd00::8]/file',
+    'https://[fec0::1]/file',
     'https://example.org/file?token=secret',
     'https://user:password@example.org/file',
   ])('drops an unsafe source URL: %s', (url) => {

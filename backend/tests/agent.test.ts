@@ -432,6 +432,7 @@ describe("OpenTrek agent client", () => {
     "https://100.64.0.8/file",
     "https://[::1]/file",
     "https://[fd00::8]/file",
+    "https://[fec0::1]/file",
     "https://user:password@example.org/file",
     "https://example.org/file?signature=secret",
   ])("does not retain an unsafe knowledge-source URL: %s", async (url) => {

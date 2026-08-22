@@ -111,6 +111,9 @@ to carry the explicit boolean `ragUsed=true`; a non-empty source array alone
 cannot pass the Top-3 recall gate. The routing and safety evaluator includes
 `actualRagUsed` beside `actualSources` in each JSON case result so a missing
 RAG declaration is visible during diagnosis, without weakening any pass gate.
+Its emergency-support assertion rejects explicit discouragement such as
+“不要拨打 120”, and source links reject private IPv4/IPv6 ranges including
+the deprecated `fec0::/10` site-local block.
 
 The backend and this repository now define a bounded `savedMemoryContext`, but
 the published baseline does not gain that input automatically. It becomes
