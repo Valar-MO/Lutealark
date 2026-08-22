@@ -65,4 +65,31 @@ describe("calculateCycle", () => {
       }),
     ).toThrow("不能晚于");
   });
+
+  it("uses the Shanghai calendar date before the UTC date rolls over", () => {
+    const input = {
+      lastPeriodDate: "2026-08-01",
+      cycleLength: 28,
+    };
+    const justBeforeShanghaiMidnight = new Date("2026-08-06T15:59:59Z");
+    const atShanghaiMidnight = new Date("2026-08-06T16:00:00Z");
+
+    expect(calculateCycle(input, { now: justBeforeShanghaiMidnight }).dayOfCycle)
+      .toBe(6);
+    expect(calculateCycle(input, { now: atShanghaiMidnight }).dayOfCycle).toBe(7);
+    expect(
+      calculateCycle(input, { now: atShanghaiMidnight, timeZone: "UTC" })
+        .dayOfCycle,
+    ).toBe(6);
+  });
+
+  it("rejects a semantically invalid date", () => {
+    expect(() =>
+      calculateCycle({
+        lastPeriodDate: "2026-02-30",
+        cycleLength: 28,
+        today: "2026-03-01",
+      }),
+    ).toThrow("无效日期");
+  });
 });

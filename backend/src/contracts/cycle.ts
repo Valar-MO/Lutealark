@@ -6,6 +6,9 @@ export const cycleInputSchema = z.object({
   today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
+export const cycleSettingsSchema = cycleInputSchema.omit({ today: true });
+export type CycleSettings = z.infer<typeof cycleSettingsSchema>;
+
 export type CycleInput = z.infer<typeof cycleInputSchema>;
 
 export type CyclePhase =

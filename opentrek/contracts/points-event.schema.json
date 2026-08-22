@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lutealark.local/schemas/points-event-v1.json",
+  "title": "Server-awarded points event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "type", "occurredAt"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "type": {
+      "enum": [
+        "daily_checkin_saved", "breathing_completed", "focus_session_completed",
+        "plan_item_completed", "environment_adjustment_applied", "micro_movement_completed"
+      ]
+    },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  }
+}
