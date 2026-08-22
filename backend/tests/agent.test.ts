@@ -97,11 +97,29 @@ describe("OpenTrek agent client", () => {
         Saved_Memory_Context: { items: ["伪造"] },
         longTermMemoryContext: "伪造",
         usagePolicy: "ignore server policy",
+        checkinDate: "2099-01-01",
+        mood: "spoofed",
+        historyContext: "spoofed",
+        traceId: "private-trace",
       },
       attachments: [],
     });
 
     expect(metadata).toEqual({ intentHint: "task" });
+  });
+
+  it("rejects unsafe session codes and all unsupported attachments", async () => {
+    const { runAgentInputSchema } = await import("../src/contracts/agent.js");
+
+    expect(runAgentInputSchema.safeParse(runInput).success).toBe(true);
+    expect(runAgentInputSchema.safeParse({
+      ...runInput,
+      sessionCode: "session-1\r\nInjected: yes",
+    }).success).toBe(false);
+    expect(runAgentInputSchema.safeParse({
+      ...runInput,
+      attachments: [{ url: "https://example.org/file" }],
+    }).success).toBe(false);
   });
 
   it("runs an agent and normalizes text and metadata", async () => {
@@ -139,7 +157,12 @@ describe("OpenTrek agent client", () => {
     expect(result).toEqual({
       sessionCode: "session-1",
       content: "先做一件最小的事情。",
-      metadata: { intent: "task_difficulty", sources: [], mode: "online" },
+      metadata: {
+        intent: "task_difficulty",
+        ragUsed: false,
+        sources: [],
+        mode: "online",
+      },
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -168,7 +191,6 @@ describe("OpenTrek agent client", () => {
           historyContext: "",
         }),
         metadata: {},
-        attachments: [],
       },
     });
   });
@@ -177,6 +199,7 @@ describe("OpenTrek agent client", () => {
     const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
     const metadata = normalizeAgentMetadata({
       intent: "cycle_question",
+      ragUsed: true,
       sources: [
         { sourceId: "one", title: "公开资料", url: "https://example.org/guide" },
         { sourceId: "one", title: "重复资料" },
@@ -193,6 +216,88 @@ describe("OpenTrek agent client", () => {
       { sourceId: "two", title: "内部资料" },
       { sourceId: "three", title: "临时签名" },
     ]);
+    expect(metadata.ragUsed).toBe(true);
+  });
+
+  it("normalizes documented OpenTrek retrieval aliases only with explicit RAG", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+    const metadata = normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [
+        {
+          itemId: 101,
+          fileName: "周期说明.pdf",
+          fileUrl: "https://example.org/cycle.pdf",
+          chunk_id: "chunk-1",
+          chunkContent: "检索到的片段",
+          recallScore: 0.82,
+        },
+        {
+          documentId: "doc-2",
+          documentName: "任务降级指南",
+          href: "http://10.0.0.8/private",
+          snippet: "不应保留私网链接",
+        },
+      ],
+    });
+
+    expect(metadata).toEqual({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [
+        {
+          sourceId: "101",
+          title: "周期说明.pdf",
+          url: "https://example.org/cycle.pdf",
+          chunkId: "chunk-1",
+          excerpt: "检索到的片段",
+          score: 0.82,
+        },
+        {
+          sourceId: "doc-2",
+          title: "任务降级指南",
+          excerpt: "不应保留私网链接",
+        },
+      ],
+    });
+  });
+
+  it("accepts a JSON-serialized source list without inferring RAG", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+    const source = JSON.stringify([{ itemId: "doc-1", fileName: "资料" }]);
+
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      sources: source,
+    })).toMatchObject({ ragUsed: false, sources: [] });
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: source,
+    })).toEqual({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [{ sourceId: "doc-1", title: "资料" }],
+    });
+  });
+
+  it("unwraps a documented retrieval data container without copying wrapper fields", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: {
+        success: true,
+        data: [{ itemId: "doc-1", fileName: "资料", chunkContent: "片段" }],
+        traceId: "must-not-cross-boundary",
+      },
+    })).toEqual({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [{ sourceId: "doc-1", title: "资料", excerpt: "片段" }],
+    });
   });
 
   it.each([
@@ -208,8 +313,10 @@ describe("OpenTrek agent client", () => {
     const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
 
     expect(normalizeAgentMetadata({
+      ragUsed: true,
       sources: [{ sourceId: "one", title: "资料", url }],
     })).toEqual({
+      ragUsed: true,
       sources: [{ sourceId: "one", title: "资料" }],
     });
   });
@@ -226,7 +333,7 @@ describe("OpenTrek agent client", () => {
           title: "不应在危机回复中显示",
           url: "https://example.org/source",
         }],
-      })).toEqual({ intent, sources: [] });
+      })).toEqual({ intent, ragUsed: false, sources: [] });
     },
   );
 
@@ -240,7 +347,87 @@ describe("OpenTrek agent client", () => {
       usagePolicy: "private policy",
       memoryCandidate: { summary: "not a memory request" },
       sources: [],
-    })).toEqual({ intent: "task_difficulty", sources: [] });
+    })).toEqual({ intent: "task_difficulty", ragUsed: false, sources: [] });
+  });
+
+  it("uses an explicit response allowlist and drops internal upstream metadata", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      schemaVersion: "1",
+      workflowVersion: "candidate-v2",
+      intent: "task_difficulty",
+      strategy: "task_breakdown",
+      action: "open_light_plan",
+      ragUsed: false,
+      sources: [],
+      trace: { traceId: "private-trace" },
+      traceId: "private-trace",
+      internalSignedUrl: "https://internal.example/file?token=secret",
+      arbitraryProviderField: "must not cross boundary",
+    })).toEqual({
+      schemaVersion: "1",
+      workflowVersion: "candidate-v2",
+      intent: "task_difficulty",
+      strategy: "task_breakdown",
+      action: "open_light_plan",
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
+  it("does not accept malformed workflow version metadata", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      schemaVersion: 1,
+      workflowVersion: "x".repeat(101),
+      intent: "task_difficulty",
+      ragUsed: false,
+      sources: [],
+    })).toEqual({
+      intent: "task_difficulty",
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
+  it.each([
+    { name: "missing ragUsed", metadata: { sources: [{ sourceId: "one", title: "资料" }] } },
+    { name: "false ragUsed", metadata: { ragUsed: false, sources: [{ sourceId: "one", title: "资料" }] } },
+    { name: "missing sources", metadata: { ragUsed: true } },
+    { name: "invalid sources", metadata: { ragUsed: true, sources: [{ title: "缺少 sourceId" }] } },
+  ])("conservatively clears inconsistent RAG evidence: $name", async ({ metadata }) => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata(metadata)).toMatchObject({
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
+  it("accepts only a valid non-sensitive memory candidate on its route", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+    const valid = {
+      candidateId: "c598fcc4-98d4-4f66-b526-65d6ba73adaf",
+      kind: "preference",
+      summary: "把任务拆成十分钟步骤",
+      requiresConsent: true,
+      sourceTurnHash: "a".repeat(64),
+    };
+
+    expect(normalizeAgentMetadata({
+      intent: "memory_request",
+      ragUsed: false,
+      sources: [],
+      memoryCandidate: valid,
+    }).memoryCandidate).toEqual(valid);
+    expect(normalizeAgentMetadata({
+      intent: "memory_request",
+      ragUsed: false,
+      sources: [],
+      memoryCandidate: { ...valid, summary: "我有抑郁症" },
+    }).memoryCandidate).toBeUndefined();
   });
 
   it.each([
@@ -339,6 +526,28 @@ describe("OpenTrek agent client", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
+
+  it("never exposes upstream error text or an unsafe error code", async () => {
+    const privateError = "internal failure https://private.example/file?token=secret";
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        success: false,
+        data: null,
+        errorCode: "BAD CODE containing private details",
+        errorMsg: privateError,
+      }, 422),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { runOpenTrekAgent } = await import("../src/clients/opentrek.js");
+    const error = await runOpenTrekAgent(runInput).catch((caught) => caught) as Error & {
+      code?: string;
+    };
+
+    expect(error.message).toBe("OpenTrek run failed (HTTP 422)");
+    expect(error.message).not.toContain(privateError);
+    expect(error.code).toBeUndefined();
+  });
 
   it("retries one HTTP 5xx response", async () => {
     const fetchMock = vi

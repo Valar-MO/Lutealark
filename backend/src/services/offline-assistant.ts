@@ -43,6 +43,12 @@ export function isOfflineSession(sessionCode: string): boolean {
 export function runOfflineAssistant(input: RunAgentInput): RunAgentResult {
   clearExpiredPendingActions();
   const message = normalize(input.message);
+  // Safety routing must win even when a previous turn left an action awaiting
+  // confirmation.
+  if (isCrisisMessage(message)) {
+    pendingActions.delete(input.sessionCode);
+    return crisisSupportResult(input.sessionCode);
+  }
   const pending = pendingActions.get(input.sessionCode);
 
   if (pending?.action === "breathing" && isAffirmative(message)) {
@@ -127,18 +133,7 @@ export function runOfflineAssistant(input: RunAgentInput): RunAgentResult {
   if (pending) pendingActions.delete(input.sessionCode);
   switch (intent) {
     case "crisis_support":
-      pendingActions.delete(input.sessionCode);
-      return result(
-        input.sessionCode,
-        [
-          "听起来你现在可能正处在很危险、很难独自承受的时刻。先不要一个人扛，也先远离可能伤害自己的物品或地点。",
-          "如果你已经准备伤害自己、正在实施，或无法保证此刻安全，请立即拨打 120 或 110，或直接前往最近的急诊；同时联系一位可信任的人，请对方现在陪着你。",
-          "如果暂时没有立即危险，也请尽快联系当地心理援助热线、学校心理中心或专业医护人员。你可以只回复我：‘现在安全’或‘现在不安全’。",
-          "离线基础支持不能替代紧急救援或专业医疗帮助。",
-        ].join("\n\n"),
-        intent,
-        "seek_immediate_help",
-      );
+      return crisisSupportResult(input.sessionCode);
 
     case "breathing":
       return result(
@@ -376,13 +371,27 @@ function memoryKind(summary: string): "preference" | "constraint" | "long_term_g
 
 export function isCrisisMessage(message: string): boolean {
   return matches(normalize(message), [
-    /自杀|轻生|不想活|结束生命|伤害自己|自残|活不下去|去死|永远消失/,
-    /kill\s*myself|suicid|self[- ]?harm|end\s+my\s+life/i,
+    /自杀|轻生|不想活|想死|求死|结束生命|伤害自己|自残|活不下去|去死|永远消失|跳楼|跳河|跳海|割腕|上吊|吞药/,
+    /kill\s*(?:myself|me)|suicid|self[- ]?harm|end\s+my\s+life|i\s*(?:want|wanna|plan|intend|am\s+going)\s+to\s+die/i,
   ]);
 }
 
 export function isSensitiveMemoryContent(summary: string): boolean {
-  return /(自杀|轻生|自残|伤害自己|不想活|焦虑|难过|低落|崩溃|烦躁|压力|紧张|害怕|委屈|心慌|想哭|情绪|疲惫|睡不(?:好|着)|失眠|月经|经期|周期|黄体|卵泡|排卵|怀孕|疾病|诊断|症状|疼痛|用药|药物|病史|suicid|self[- ]?harm|anxious|anxiety|depress|sad|panic|stress|afraid|scared|fatigue|tired|insomnia|sleep|menstrual|period|pregnan|diagnos|symptom|pain|medicat|disease|illness)/i.test(summary);
+  return /(自杀|轻生|自残|伤害自己|不想活|想死|跳楼|割腕|吞药|焦虑|抑郁(?:症|障碍)?|双相|躁郁|精神分裂|强迫症|创伤后应激|多动症|注意缺陷|孤独症|自闭症|进食障碍|难过|低落|崩溃|烦躁|压力|紧张|害怕|委屈|心慌|想哭|情绪|疲惫|睡不(?:好|着)|失眠|月经|经期|周期|黄体|卵泡|排卵|怀孕|疾病|诊断|症状|疼痛|用药|药物|病史|病历|检查报告|检验结果|化验结果|血压|血糖|心率|脉搏|体温|过敏|住院|手术|suicid|self[- ]?harm|want\s+to\s+die|anxious|anxiety|depress|bipolar|schizophren|ocd|ptsd|adhd|autis|eating\s+disorder|sad|panic|stress|afraid|scared|fatigue|tired|insomnia|sleep|menstrual|period|pregnan|diagnos|symptom|pain|medicat|disease|illness|medical\s+record|lab\s+result|blood\s+pressure|blood\s+sugar|heart\s+rate)/i.test(summary);
+}
+
+function crisisSupportResult(sessionCode: string): RunAgentResult {
+  return result(
+    sessionCode,
+    [
+      "听起来你现在可能正处在很危险、很难独自承受的时刻。先不要一个人扛，也先远离可能伤害自己的物品或地点。",
+      "如果你已经准备伤害自己、正在实施，或无法保证此刻安全，请立即拨打 120 或 110，或直接前往最近的急诊；同时联系一位可信任的人，请对方现在陪着你。",
+      "如果暂时没有立即危险，也请尽快联系当地心理援助热线、学校心理中心或专业医护人员。你可以只回复我：‘现在安全’或‘现在不安全’。",
+      "离线基础支持不能替代紧急救援或专业医疗帮助。",
+    ].join("\n\n"),
+    "crisis_support",
+    "seek_immediate_help",
+  );
 }
 
 function clearExpiredPendingActions(): void {

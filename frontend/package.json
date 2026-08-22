@@ -8,18 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
-    "preview": "vite preview",
-    "android:sync": "npm run build && cap sync android",
-    "android:open": "cap open android",
-    "android:build:debug": "npm run android:sync && cd android && ./gradlew assembleDebug"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@aparajita/capacitor-secure-storage": "^8.0.0",
-    "@capacitor/android": "8.4.2",
-    "@capacitor/app": "8.1.1",
-    "@capacitor/core": "8.4.2",
-    "@capacitor/filesystem": "^8.1.3",
-    "@capacitor/share": "^8.0.1",
     "@lutealark/contracts": "file:../packages/contracts",
     "@tailwindcss/vite": "^4.3.2",
     "react": "^19.2.7",
@@ -29,7 +20,6 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.4.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
@@ -38,9 +28,5 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.10"
-  },
-  "overrides": {
-    "@capacitor/core": "8.4.2",
-    "@capacitor/ios": "8.4.2"
   }
 }

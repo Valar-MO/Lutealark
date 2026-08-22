@@ -1,5 +1,6 @@
 import { ApiRequestError, requestJson } from './api'
 import { getOrCreateDeviceId } from './personal-data'
+import { dataSubjectKey, getActiveDataSubject } from './data-subject'
 import type {
   ActivityRecord,
   ActivityType,
@@ -149,13 +150,28 @@ type ProductRequestOptions = {
 }
 
 async function productRequest<T>(path: string, options: ProductRequestOptions = {}): Promise<T> {
+  // Product requests may remain in flight while another tab logs in or out.
+  // Capture the subject before dispatch and reject a response that crosses
+  // that boundary so callers cannot apply old-account data to the new view.
+  const requestSubjectKey = dataSubjectKey(getActiveDataSubject())
   const headers: Record<string, string> = {
     'X-Lutealark-User-Id': getOrCreateDeviceId(),
   }
   if (options.body !== undefined) headers['Content-Type'] = 'application/json; charset=utf-8'
-  return requestJson<T>(path, {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  }, PRODUCT_TIMEOUT_MS)
+  try {
+    const result = await requestJson<T>(path, {
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    }, PRODUCT_TIMEOUT_MS)
+    if (dataSubjectKey(getActiveDataSubject()) !== requestSubjectKey) {
+      throw new Error('数据主体已变更，已取消旧产品请求。')
+    }
+    return result
+  } catch (cause) {
+    if (dataSubjectKey(getActiveDataSubject()) !== requestSubjectKey) {
+      throw new Error('数据主体已变更，已取消旧产品请求。')
+    }
+    throw cause
+  }
 }

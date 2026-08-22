@@ -21,9 +21,18 @@ describe('chat metadata', () => {
   })
 
   it('preserves explicit online RAG status without inventing it', () => {
-    expect(parseChatMetadata({ mode: 'online', ragUsed: true }).ragUsed).toBe(true)
+    expect(parseChatMetadata({
+      mode: 'online',
+      ragUsed: true,
+      sources: [{ sourceId: 'source-1', title: '资料' }],
+    }).ragUsed).toBe(true)
+    expect(parseChatMetadata({ mode: 'online', ragUsed: true }).ragUsed).toBeUndefined()
     expect(parseChatMetadata({ mode: 'online' }).ragUsed).toBeUndefined()
     expect(parseChatMetadata({ mode: 'offline', ragUsed: true }).ragUsed).toBe(false)
+    expect(parseChatMetadata({
+      mode: 'online',
+      sources: [{ title: '没有 sourceId 的标题' }],
+    }).sources).toEqual([])
   })
 
   it.each(['safety_crisis', 'crisis_support'])(

@@ -22,7 +22,7 @@ export type ChatMessage = {
   createdAt?: string
 }
 
-type AppStore = {
+export type AppStore = {
   view: AppView
   sessionCode: string
   activeConversationId: string
@@ -50,6 +50,16 @@ type AppStore = {
   }) => void
   resetPersonalData: () => void
   resetConversation: () => void
+}
+
+export function persistedAppSession(state: AppStore) {
+  return {
+    dataSubjectKey: state.dataSubjectKey,
+    sessionCode: state.sessionCode,
+    activeConversationId: state.activeConversationId,
+    messages: state.messages,
+    input: state.input,
+  }
 }
 
 export const useAppStore = create<AppStore>()(
@@ -84,12 +94,21 @@ export const useAppStore = create<AppStore>()(
       })),
       switchPersonalDataSubject: (dataSubjectKey, value) => set((state) => {
         if (state.dataSubjectKey === dataSubjectKey && !value) return state
+        const subjectChanged = state.dataSubjectKey !== dataSubjectKey
         return {
           dataSubjectKey,
           cycleSettings: value?.cycleSettings ?? null,
           cycleResult: value?.cycleResult ?? null,
           dailyCheckins: value?.dailyCheckins ?? [],
           breathingRecords: value?.breathingRecords ?? [],
+          // The persisted chat belongs to the persisted dataSubjectKey. This
+          // also rejects legacy, unbound session data on the first bootstrap.
+          ...(subjectChanged ? {
+            sessionCode: '',
+            activeConversationId: '',
+            messages: [],
+            input: '',
+          } : {}),
         }
       }),
       resetPersonalData: () => set({
@@ -108,12 +127,7 @@ export const useAppStore = create<AppStore>()(
     {
       name: 'lutealark.app-session.v1',
       storage: createJSONStorage(() => sessionStorage),
-      partialize: (state) => ({
-        sessionCode: state.sessionCode,
-        activeConversationId: state.activeConversationId,
-        messages: state.messages,
-        input: state.input,
-      }),
+      partialize: persistedAppSession,
     },
   ),
 )

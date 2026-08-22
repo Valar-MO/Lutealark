@@ -29,9 +29,6 @@ import {
 
 export const AUTH_SESSION_COOKIE = "lutealark_session";
 export const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-export const CAPACITOR_CLIENT_HEADER = "X-Lutealark-Client";
-export const CAPACITOR_CLIENT_VALUE = "capacitor";
-export const CAPACITOR_WEBVIEW_ORIGIN = "https://localhost";
 
 const PASSWORD_SALT_BYTES = 16;
 const PASSWORD_HASH_BYTES = 64;
@@ -161,27 +158,6 @@ export function readCookieValue(
   return undefined;
 }
 
-/**
- * Returns whether Authorization was supplied and, when well-formed, the
- * bearer session token. Presence is intentionally retained so an invalid or
- * expired bearer token cannot fall back to a cookie or anonymous identity.
- */
-export function readBearerToken(request: Request): {
-  present: boolean;
-  token?: string;
-} {
-  const header = request.headers.get("Authorization");
-  if (header === null) return { present: false };
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return match ? { present: true, token: match[1] } : { present: true };
-}
-
-export function isCapacitorClient(request: Request): boolean {
-  return request.headers.get("Origin") === CAPACITOR_WEBVIEW_ORIGIN
-    && request.headers.get(CAPACITOR_CLIENT_HEADER)?.trim().toLowerCase()
-      === CAPACITOR_CLIENT_VALUE;
-}
-
 function securePasswordMatch(candidate: Buffer, account: AuthCredential | null): boolean {
   const expected = account?.passwordHash.length === PASSWORD_HASH_BYTES
     ? account.passwordHash
@@ -287,20 +263,6 @@ export class AuthService {
   }
 
   async resolveRequestUser(request: Request): Promise<ResolvedUser | null> {
-    const bearer = readBearerToken(request);
-    // A supplied Authorization header is authoritative, including when its
-    // token is malformed, expired, or revoked.
-    if (bearer.present) {
-      if (!isValidSessionToken(bearer.token)) return null;
-      const session = await this.repository.findActiveSession(
-        hashSessionToken(bearer.token),
-        this.now(),
-      );
-      return session
-        ? { authType: "account", userId: session.userId, email: session.email }
-        : null;
-    }
-
     const token = readCookieValue(
       request.headers.get("Cookie"),
       AUTH_SESSION_COOKIE,

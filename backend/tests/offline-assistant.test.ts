@@ -141,6 +141,8 @@ describe("offline assistant", () => {
     "请记住我现在压力大、紧张、害怕又委屈",
     "请记住我心慌、想哭、很疲惫",
     "请记住我的黄体期症状和用药",
+    "请记住我有抑郁症",
+    "请记住我的检验结果和血压记录",
   ])("does not create memory candidates from transient or health content: %s", (message) => {
     const response = run(message);
 
@@ -160,6 +162,33 @@ describe("offline assistant", () => {
     expect(response.content).toContain("110");
     expect(response.content).toContain("不能替代紧急救援");
     expect(response.metadata.memoryCandidate).toBeUndefined();
+  });
+
+  it.each([
+    "我想死",
+    "我准备跳楼",
+    "I want to die",
+  ])("recognizes an explicit crisis statement: %s", (message) => {
+    const response = run(message);
+
+    expect(response.metadata).toMatchObject({
+      intent: "crisis_support",
+      action: "seek_immediate_help",
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
+  it("prioritizes crisis safety over a pending tool confirmation", () => {
+    const sessionCode = createOfflineSession().sessionCode;
+    run("我现在很焦虑", sessionCode);
+
+    const response = run("好，但我准备跳楼", sessionCode);
+
+    expect(response.metadata).toMatchObject({
+      intent: "crisis_support",
+      action: "seek_immediate_help",
+    });
   });
 
   it("never claims to have retrieved RAG sources", () => {

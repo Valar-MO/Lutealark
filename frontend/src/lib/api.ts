@@ -6,7 +6,6 @@ import type {
   DailyCheckin,
 } from '@lutealark/contracts'
 import { getOrCreateDeviceId } from './data-subject'
-import { getNativeAccessToken, isNativeRuntime } from './native-auth'
 
 type SessionResponse = CreateAgentSessionResponse
 export type ChatResponse = AgentChatResponse
@@ -27,36 +26,11 @@ export type CycleSettings = SharedCycleSettings
 export type CycleResult = SharedCycleResult
 export type DailyCheckIn = DailyCheckin
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/$/, '')
 const SESSION_TIMEOUT_MS = 20_000
 const CHAT_TIMEOUT_MS = 130_000
 const CYCLE_TIMEOUT_MS = 10_000
 const AGENT_SESSION_RECREATE_REQUIRED = 'AGENT_SESSION_RECREATE_REQUIRED'
 let sessionPromise: Promise<string> | null = null
-
-export function validateNativeApiConfiguration() {
-  if (!isNativeRuntime()) return
-  if (!apiBaseUrl) {
-    throw new Error('原生应用缺少后端地址，请将 VITE_API_BASE_URL 设置为 HTTPS origin。')
-  }
-  let parsed: URL
-  try {
-    parsed = new URL(apiBaseUrl)
-  } catch {
-    throw new Error('原生应用的 VITE_API_BASE_URL 不是有效网址。')
-  }
-  if (
-    parsed.protocol !== 'https:'
-    || parsed.username
-    || parsed.password
-    || parsed.pathname !== '/'
-    || parsed.search
-    || parsed.hash
-    || parsed.origin !== apiBaseUrl
-  ) {
-    throw new Error('原生应用的 VITE_API_BASE_URL 必须是无路径、凭据、查询或片段的 HTTPS origin。')
-  }
-}
 
 export function isOfflineSessionCode(sessionCode: string | null | undefined): boolean {
   return typeof sessionCode === 'string' && sessionCode.startsWith('offline:')
@@ -82,6 +56,7 @@ type SendAgentMessageWithSessionRetryInput = {
   dailyCheckin?: DailyCheckIn
   dailyCheckins?: DailyCheckIn[]
   onSessionCode: (sessionCode: string) => void
+  isActive?: () => boolean
 }
 
 export function clearAgentSessionCache() {
@@ -146,14 +121,21 @@ export async function sendAgentMessageWithSessionRetry({
   dailyCheckin,
   dailyCheckins,
   onSessionCode,
+  isActive = () => true,
 }: SendAgentMessageWithSessionRetryInput): Promise<ChatResponse> {
+  const assertActive = () => {
+    if (!isActive()) throw new Error('数据主体已变更，已取消旧对话重试。')
+  }
+  assertActive()
   let activeSessionCode = sessionCode
   if (!activeSessionCode) {
     activeSessionCode = await createAgentSession()
+    assertActive()
     onSessionCode(activeSessionCode)
   }
 
   const send = async (code: string) => {
+    assertActive()
     const reply = await sendAgentMessage(
       code,
       message,
@@ -161,6 +143,7 @@ export async function sendAgentMessageWithSessionRetry({
       dailyCheckin,
       dailyCheckins,
     )
+    assertActive()
     if (reply.sessionCode !== code) onSessionCode(reply.sessionCode)
     return reply
   }
@@ -173,9 +156,11 @@ export async function sendAgentMessageWithSessionRetry({
     }
   }
 
+  assertActive()
   clearAgentSessionCache()
   onSessionCode('')
   const replacementSessionCode = await createAgentSession(true)
+  assertActive()
   onSessionCode(replacementSessionCode)
   return send(replacementSessionCode)
 }
@@ -189,21 +174,13 @@ export function calculateCycle(settings: CycleSettings) {
 }
 
 export async function requestJson<T>(path: string, init: RequestInit, timeoutMs: number): Promise<T> {
-  validateNativeApiConfiguration()
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   let response: Response
   try {
-    const headers = new Headers(init.headers)
-    if (isNativeRuntime()) {
-      headers.set('X-Lutealark-Client', 'capacitor')
-      const token = await getNativeAccessToken()
-      if (token) headers.set('Authorization', `Bearer ${token}`)
-    }
-    response = await fetch(`${apiBaseUrl}${path}`, {
+    response = await fetch(path, {
       credentials: 'include',
       ...init,
-      headers,
       signal: controller.signal,
     })
   } catch (cause) {

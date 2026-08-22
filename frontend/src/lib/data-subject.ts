@@ -1,5 +1,5 @@
 const DEVICE_ID_STORAGE_KEY = 'lutealark.device-id.v1'
-const ACTIVE_SUBJECT_STORAGE_KEY = 'lutealark.active-data-subject.v1'
+export const ACTIVE_SUBJECT_STORAGE_KEY = 'lutealark.active-data-subject.v1'
 
 export type DataSubject = {
   kind: 'device' | 'account'
@@ -28,7 +28,6 @@ export function getOrCreateDeviceId(): string {
 }
 
 export function getActiveDataSubject(): DataSubject {
-  if (inMemorySubject) return { ...inMemorySubject }
   const storage = getLocalStorage()
   try {
     const value = storage?.getItem(ACTIVE_SUBJECT_STORAGE_KEY)
@@ -39,9 +38,17 @@ export function getActiveDataSubject(): DataSubject {
         return { ...parsed }
       }
     }
+    // localStorage is shared by same-origin tabs. An absent value after we
+    // previously cached an account is meaningful too (for example, another
+    // tab cleared it), so do not keep returning the stale in-memory subject.
+    if (storage) {
+      inMemorySubject = deviceDataSubject()
+      return { ...inMemorySubject }
+    }
   } catch {
     // Fall through to this browser's anonymous subject.
   }
+  if (inMemorySubject) return { ...inMemorySubject }
   inMemorySubject = deviceDataSubject()
   return { ...inMemorySubject }
 }

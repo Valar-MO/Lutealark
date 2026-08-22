@@ -231,35 +231,6 @@ describe("AuthService", () => {
     });
   });
 
-  it("uses bearer auth first and never falls back after an invalid bearer", async () => {
-    const repository = new FakeAuthRepository();
-    const service = new AuthService(repository);
-    const registered = await service.register({ email: EMAIL, password: PASSWORD });
-    const validBearer = new Request("http://localhost/api/personal-data", {
-      headers: {
-        Authorization: `Bearer ${registered.sessionToken}`,
-        "X-Lutealark-User-Id": DEVICE_ID,
-      },
-    });
-
-    await expect(service.resolveRequestUser(validBearer)).resolves.toEqual({
-      authType: "account",
-      userId: registered.user.userId,
-      email: EMAIL,
-    });
-
-    for (const authorization of ["Basic abc", "Bearer invalid-token"]) {
-      const request = new Request("http://localhost/api/personal-data", {
-        headers: {
-          Authorization: authorization,
-          Cookie: `${AUTH_SESSION_COOKIE}=${registered.sessionToken}`,
-          "X-Lutealark-User-Id": DEVICE_ID,
-        },
-      });
-      await expect(service.resolveRequestUser(request)).resolves.toBeNull();
-    }
-  });
-
   it("retains the anonymous UUID fallback without treating it as an account", async () => {
     const service = new AuthService(new FakeAuthRepository());
     const request = new Request("http://localhost/api/personal-data", {
@@ -285,12 +256,6 @@ describe("AuthService", () => {
 
     await expect(service.resolveRequestUser(new Request("http://localhost", {
       headers: { Cookie: cookie },
-    }))).resolves.toBeNull();
-    await expect(service.resolveRequestUser(new Request("http://localhost", {
-      headers: {
-        Authorization: `Bearer ${registered.sessionToken}`,
-        "X-Lutealark-User-Id": DEVICE_ID,
-      },
     }))).resolves.toBeNull();
     await service.logout(registered.sessionToken);
     expect(repository.lastDeletedHash).toEqual(hashSessionToken(registered.sessionToken));
@@ -383,84 +348,6 @@ describe("auth HTTP routes", () => {
     const token = readCookieValue(setCookie, AUTH_SESSION_COOKIE)!;
     expect(JSON.stringify(body)).not.toContain(token);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-  });
-
-  it("returns a bearer token only to an explicit Capacitor client", async () => {
-    const repository = new FakeAuthRepository();
-    const routes = createAuthRoutes({
-      service: new AuthService(repository),
-      secureCookies: false,
-    });
-    const registration = await routes.request("/register", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://localhost",
-        "X-Lutealark-Client": "capacitor",
-      },
-      body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
-    });
-    const registeredBody = await registration.json() as { accessToken: string };
-    expect(registeredBody.accessToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(registration.headers.get("Set-Cookie")).toBeNull();
-
-    const nativeLogin = await routes.request("/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://localhost",
-        "X-Lutealark-Client": "capacitor",
-      },
-      body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
-    });
-    expect(await nativeLogin.json()).toHaveProperty(
-      "accessToken",
-      expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-    );
-    expect(nativeLogin.headers.get("Set-Cookie")).toBeNull();
-
-    for (const origin of [undefined, "https://app.example.com"]) {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "X-Lutealark-Client": "capacitor",
-      };
-      if (origin) headers.Origin = origin;
-      const webLogin = await routes.request("/login", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
-      });
-      expect(await webLogin.json()).not.toHaveProperty("accessToken");
-      expect(webLogin.headers.get("Set-Cookie")).toContain(`${AUTH_SESSION_COOKIE}=`);
-    }
-
-    const me = await routes.request("/me", {
-      headers: {
-        Authorization: `Bearer ${registeredBody.accessToken}`,
-        "X-Lutealark-User-Id": DEVICE_ID,
-      },
-    });
-    await expect(me.json()).resolves.toMatchObject({
-      authenticated: true,
-      authType: "account",
-      user: { email: EMAIL },
-    });
-
-    const logout = await routes.request("/logout", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${registeredBody.accessToken}` },
-    });
-    expect(logout.status).toBe(200);
-    expect(repository.lastDeletedHash).toEqual(hashSessionToken(registeredBody.accessToken));
-
-    const afterLogout = await routes.request("/me", {
-      headers: { Authorization: `Bearer ${registeredBody.accessToken}` },
-    });
-    await expect(afterLogout.json()).resolves.toEqual({
-      authenticated: false,
-      authType: "none",
-      user: null,
-    });
   });
 
   it("marks the cookie Secure for HTTPS deployments", async () => {
@@ -652,6 +539,25 @@ describe("auth HTTP routes", () => {
     const limited = await request();
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toBe("60");
+  });
+
+  it("preserves active rate-limit penalties when the bucket map is full", () => {
+    const limiter = new MemoryAuthRateLimiter(() => 10_000, 1);
+    const rule = { limit: 1, windowMs: 60_000 };
+
+    expect(limiter.consume("limited-client", rule).allowed).toBe(true);
+    expect(limiter.consume("limited-client", rule)).toEqual({
+      allowed: false,
+      retryAfterSeconds: 60,
+    });
+    expect(limiter.consume("new-client", rule)).toEqual({
+      allowed: false,
+      retryAfterSeconds: 1,
+    });
+    expect(limiter.consume("limited-client", rule)).toEqual({
+      allowed: false,
+      retryAfterSeconds: 60,
+    });
   });
 
   it("does not let a caller bypass client rate limits with a forged provider IP header", async () => {

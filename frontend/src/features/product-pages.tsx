@@ -50,7 +50,7 @@ import {
   saveDailyPlanRemote,
   type QueuedActivity,
 } from '../lib/product-local'
-import { getActiveDataSubject } from '../lib/data-subject'
+import { dataSubjectKey, getActiveDataSubject } from '../lib/data-subject'
 import {
   EnvironmentTuner,
   FocusTimer,
@@ -78,6 +78,7 @@ export function ToolsPage({
   isBufferMode: boolean
 }) {
   const [subject] = useState(getActiveDataSubject)
+  const subjectKey = dataSubjectKey(subject)
   const today = businessDate()
   const [planItems, setPlanItems] = useState<GentlePlanItem[]>(() => (
     loadDailyPlanCache(subject, today)?.items ?? []
@@ -95,10 +96,15 @@ export function ToolsPage({
   const enqueuePlanSync = useCallback((items: GentlePlanItem[]) => {
     const operation = planSyncQueueRef.current
       .catch(() => undefined)
-      .then(() => syncPlan(items, today))
+      .then(() => {
+        if (dataSubjectKey(getActiveDataSubject()) !== subjectKey) {
+          throw new Error('数据主体已变更，已取消旧计划同步。')
+        }
+        return syncPlan(items, today)
+      })
     planSyncQueueRef.current = operation.then(() => undefined, () => undefined)
     return operation
-  }, [today])
+  }, [subjectKey, today])
 
   useEffect(() => {
     const element = target ? document.getElementById(`tool-${target}`) : null
@@ -160,6 +166,9 @@ export function ToolsPage({
     if (activityFlushRef.current) return activityFlushRef.current
     let currentResult: Awaited<ReturnType<typeof recordActivity>> | null = null
     const operation = flushActivityOutbox(subject, async (activity) => {
+      if (dataSubjectKey(getActiveDataSubject()) !== subjectKey) {
+        throw new Error('数据主体已变更，已取消旧记录同步。')
+      }
       const result = await recordActivity(activity)
       if (activity.id === currentActivityId) currentResult = result
     }).then(({ sent, remaining }) => {
@@ -175,7 +184,7 @@ export function ToolsPage({
     }).finally(() => { activityFlushRef.current = null })
     activityFlushRef.current = operation
     return operation
-  }, [subject])
+  }, [subject, subjectKey])
 
   useEffect(() => {
     if (loadActivityOutbox(subject).length > 0) void flushActivities()
@@ -285,6 +294,8 @@ export function ToolsPage({
 
 export function MemoryPage() {
   const navigate = useNavigate()
+  const [subject] = useState(getActiveDataSubject)
+  const subjectKey = dataSubjectKey(subject)
   const resetConversation = useAppStore((state) => state.resetConversation)
   const setActiveConversationId = useAppStore((state) => state.setActiveConversationId)
   const setMessages = useAppStore((state) => state.setMessages)
@@ -293,26 +304,41 @@ export function MemoryPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState('')
+  const loadSequence = useRef(0)
+
+  const isCurrentSubject = useCallback(() => (
+    dataSubjectKey(getActiveDataSubject()) === subjectKey
+    && useAppStore.getState().dataSubjectKey === subjectKey
+  ), [subjectKey])
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current
+    if (!isCurrentSubject()) return
     setLoading(true)
     setError('')
     try {
-      setConversations(await listConversations(includeArchived))
+      const next = await listConversations(includeArchived)
+      if (!isCurrentSubject() || loadSequence.current !== sequence) return
+      setConversations(next)
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject() && loadSequence.current === sequence) setError(errorMessage(cause))
     } finally {
-      setLoading(false)
+      if (isCurrentSubject() && loadSequence.current === sequence) setLoading(false)
     }
-  }, [includeArchived])
+  }, [includeArchived, isCurrentSubject])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    return () => { loadSequence.current += 1 }
+  }, [load])
 
   const openConversation = async (conversation: Conversation) => {
+    if (!isCurrentSubject()) return
     setBusyId(conversation.id)
     setError('')
     try {
       const detail = await getConversation(conversation.id)
+      if (!isCurrentSubject()) return
       const restored: ChatMessage[] = detail.messages
         .filter((message) => message.role === 'user' || message.role === 'assistant')
         .map((message) => ({
@@ -327,63 +353,71 @@ export function MemoryPage() {
       setMessages(restored)
       navigate('/agent')
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
   const startConversation = async () => {
+    if (!isCurrentSubject()) return
     setBusyId('new')
     setError('')
     try {
       const conversation = await createConversation({ title: '新对话' })
+      if (!isCurrentSubject()) return
       resetConversation()
       setActiveConversationId(conversation.id)
       navigate('/agent')
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
   const rename = async (conversation: Conversation) => {
     const title = window.prompt('输入新标题', conversation.title ?? '')?.trim()
     if (!title || title === conversation.title) return
+    if (!isCurrentSubject()) return
     setBusyId(conversation.id)
     try {
       await updateConversation(conversation.id, { title })
+      if (!isCurrentSubject()) return
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
   const toggleArchive = async (conversation: Conversation) => {
+    if (!isCurrentSubject()) return
     setBusyId(conversation.id)
     try {
       await updateConversation(conversation.id, { archived: !conversation.archived })
+      if (!isCurrentSubject()) return
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
   const remove = async (conversation: Conversation) => {
     if (!window.confirm(`确定删除“${conversation.title ?? '未命名对话'}”及其全部消息吗？此操作无法撤销。`)) return
+    if (!isCurrentSubject()) return
     setBusyId(conversation.id)
     try {
       await deleteConversation(conversation.id)
+      if (!isCurrentSubject()) return
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
@@ -444,6 +478,8 @@ const MEMORY_KIND_LABELS: Record<MemoryKind, string> = {
 }
 
 function LongTermMemorySection() {
+  const [subject] = useState(getActiveDataSubject)
+  const subjectKey = dataSubjectKey(subject)
   const [memories, setMemories] = useState<MemoryEntry[]>([])
   const [kind, setKind] = useState<MemoryKind>('preference')
   const [summary, setSummary] = useState('')
@@ -454,25 +490,39 @@ function LongTermMemorySection() {
   const [busyId, setBusyId] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const loadSequence = useRef(0)
+
+  const isCurrentSubject = useCallback(() => (
+    dataSubjectKey(getActiveDataSubject()) === subjectKey
+    && useAppStore.getState().dataSubjectKey === subjectKey
+  ), [subjectKey])
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current
+    if (!isCurrentSubject()) return
     setLoading(true)
     setError('')
     try {
-      setMemories(await listMemories(includeArchived))
+      const next = await listMemories(includeArchived)
+      if (!isCurrentSubject() || loadSequence.current !== sequence) return
+      setMemories(next)
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject() && loadSequence.current === sequence) setError(errorMessage(cause))
     } finally {
-      setLoading(false)
+      if (isCurrentSubject() && loadSequence.current === sequence) setLoading(false)
     }
-  }, [includeArchived])
+  }, [includeArchived, isCurrentSubject])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    return () => { loadSequence.current += 1 }
+  }, [load])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const normalized = summary.trim()
     if (!normalized || !consent) return
+    if (!isCurrentSubject()) return
     setSaving(true)
     setError('')
     setNotice('')
@@ -484,53 +534,60 @@ function LongTermMemorySection() {
         sourceTurnHash: `manual:${crypto.randomUUID()}`,
         consent: true,
       })
+      if (!isCurrentSubject()) return
       setSummary('')
       setConsent(false)
       setNotice('已经你同意保存这条长期记忆。')
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setSaving(false)
+      if (isCurrentSubject()) setSaving(false)
     }
   }
 
   const edit = async (memory: MemoryEntry) => {
     const nextSummary = window.prompt('编辑这条记忆', memory.summary)?.trim()
     if (!nextSummary || nextSummary === memory.summary) return
+    if (!isCurrentSubject()) return
     setBusyId(memory.id)
     try {
       await updateMemory(memory.id, { summary: nextSummary })
+      if (!isCurrentSubject()) return
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
   const toggleArchive = async (memory: MemoryEntry) => {
+    if (!isCurrentSubject()) return
     setBusyId(memory.id)
     try {
       await updateMemory(memory.id, { archived: !memory.archived })
+      if (!isCurrentSubject()) return
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
   const remove = async (memory: MemoryEntry) => {
     if (!window.confirm('确定删除这条长期记忆吗？此操作无法撤销。')) return
+    if (!isCurrentSubject()) return
     setBusyId(memory.id)
     try {
       await deleteMemory(memory.id)
+      if (!isCurrentSubject()) return
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setBusyId('')
+      if (isCurrentSubject()) setBusyId('')
     }
   }
 
@@ -642,9 +699,8 @@ export function AccountPage() {
     try {
       const exported = await exportAccountData()
       const disposition = await saveAccountExport(exported)
-      setNotice(disposition === 'shared'
-        ? '已将完整账号数据交给系统分享。请将文件保存在信任的位置。'
-        : '已下载完整账号数据 JSON。请将文件保存在信任的位置。')
+      void disposition
+      setNotice('已下载完整账号数据 JSON。请将文件保存在信任的位置。')
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -678,7 +734,7 @@ export function AccountPage() {
       <div className="mx-auto max-w-3xl">
         <p className="text-xs font-medium tracking-[.18em] text-[#829078]">ACCOUNT & SYNC</p>
         <h2 className="mt-2 font-serif text-3xl font-semibold text-[#353c32]">账号与跨设备同步</h2>
-        <p className="mt-2 text-sm leading-6 text-[#7d776f]">不登录也能使用。网页登录使用 HttpOnly 安全会话，App 登录凭据保存在系统安全存储中，便于在其他设备读取数据。</p>
+        <p className="mt-2 text-sm leading-6 text-[#7d776f]">不登录也能使用。登录后，数据可在使用同一账号的本地浏览器之间同步。</p>
 
         {error && <p className="mt-4 rounded-2xl border border-[#e2b7a8] bg-[#fff5f0] px-4 py-3 text-sm text-[#8a5140]" role="alert">{error}</p>}
         {notice && <p className="mt-4 rounded-2xl border border-[#d8dfd2] bg-[#f4f7f1] px-4 py-3 text-sm text-[#566451]" role="status">{notice}</p>}
@@ -731,42 +787,58 @@ export function AccountPage() {
 }
 
 export function PointsPage() {
+  const [subject] = useState(getActiveDataSubject)
+  const subjectKey = dataSubjectKey(subject)
   const [summary, setSummary] = useState<PointsSummary | null>(null)
   const [goal, setGoal] = useState(30)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const loadSequence = useRef(0)
+
+  const isCurrentSubject = useCallback(() => (
+    dataSubjectKey(getActiveDataSubject()) === subjectKey
+    && useAppStore.getState().dataSubjectKey === subjectKey
+  ), [subjectKey])
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current
+    if (!isCurrentSubject()) return
     setLoading(true)
     setError('')
     try {
       const next = await getPointsSummary(businessDate())
+      if (!isCurrentSubject() || loadSequence.current !== sequence) return
       setSummary(next)
       setGoal(next.weeklyGoal)
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject() && loadSequence.current === sequence) setError(errorMessage(cause))
     } finally {
-      setLoading(false)
+      if (isCurrentSubject() && loadSequence.current === sequence) setLoading(false)
     }
-  }, [])
+  }, [isCurrentSubject])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    return () => { loadSequence.current += 1 }
+  }, [load])
 
   const saveGoal = async (event: FormEvent) => {
     event.preventDefault()
+    if (!isCurrentSubject()) return
     setSaving(true)
     setError('')
     setNotice('')
     try {
       await updateWeeklyPointsGoal(goal)
+      if (!isCurrentSubject()) return
       setNotice('本周目标已更新。')
       await load()
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isCurrentSubject()) setError(errorMessage(cause))
     } finally {
-      setSaving(false)
+      if (isCurrentSubject()) setSaving(false)
     }
   }
 

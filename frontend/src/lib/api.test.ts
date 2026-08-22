@@ -179,6 +179,32 @@ describe('Agent session recreation', () => {
     })).rejects.toMatchObject({ code: 'AGENT_CHAT_FAILED' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('cancels stale-session recreation when the conversation subject changes', async () => {
+    const storage = memoryStorage({ 'lutealark.device-id.v1': DEVICE_ID })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    })
+    let active = true
+    const fetchMock = vi.fn(async () => {
+      active = false
+      return jsonResponse({
+        error: 'AGENT_SESSION_RECREATE_REQUIRED',
+        message: '会话需要重建',
+      }, 409)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(sendAgentMessageWithSessionRetry({
+      sessionCode: 'old-subject-session',
+      message: '不应重试到新账号',
+      onSessionCode: () => undefined,
+      isActive: () => active,
+    })).rejects.toThrow('数据主体已变更')
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
 })
 
 describe('OpenTrek reconnection', () => {

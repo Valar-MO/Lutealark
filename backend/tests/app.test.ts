@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { app, createApp } from "../src/app.js";
-import { parseCorsOrigins } from "../src/config/env.js";
+import { env, parseCorsOrigins } from "../src/config/env.js";
 import type { PersonalDataSnapshot } from "../src/contracts/personal-data.js";
 import { DatabaseUnavailableError } from "../src/db/pool.js";
 import type { PersonalDataRepository } from "../src/repositories/personal-data.js";
@@ -38,12 +38,12 @@ describe("HTTP responses", () => {
     expect(() => parseCorsOrigins("https://api.example.com/path")).toThrow(
       "must contain exact HTTP(S) origins",
     );
-    expect(() => parseCorsOrigins("capacitor://localhost")).toThrow(
+    expect(() => parseCorsOrigins("ftp://localhost")).toThrow(
       "must contain exact HTTP(S) origins",
     );
   });
 
-  it("allows a configured Capacitor origin and its credential headers", async () => {
+  it("allows a configured local development origin and its headers", async () => {
     const testApp = createApp({
       personalDataRepository: makeRepository(),
       corsOrigins: ["https://localhost"],
@@ -54,9 +54,7 @@ describe("HTTP responses", () => {
         Origin: "https://localhost",
         "Access-Control-Request-Method": "GET",
         "Access-Control-Request-Headers": [
-          "Authorization",
           "Content-Type",
-          "X-Lutealark-Client",
           "X-Lutealark-User-Id",
         ].join(", "),
       },
@@ -66,7 +64,7 @@ describe("HTTP responses", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://localhost");
     expect(response.headers.get("Access-Control-Allow-Credentials")).toBe("true");
     expect(response.headers.get("Access-Control-Allow-Methods")).toContain("DELETE");
-    expect(response.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+    expect(response.headers.get("Access-Control-Allow-Headers")).toContain("X-Lutealark-User-Id");
     expect(response.headers.get("Vary")).toContain("Origin");
   });
 
@@ -80,13 +78,41 @@ describe("HTTP responses", () => {
       headers: {
         Origin: "https://localhost.attacker.example",
         "Access-Control-Request-Method": "GET",
-        "Access-Control-Request-Headers": "Authorization",
+        "Access-Control-Request-Headers": "X-Lutealark-User-Id",
       },
     });
 
     expect(response.status).toBe(403);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
     await expect(response.json()).resolves.toMatchObject({ error: "CORS_ORIGIN_DENIED" });
+  });
+
+  it("rejects an actual request from a non-allowed Origin before routing", async () => {
+    const repository = makeRepository();
+    const testApp = createApp({
+      personalDataRepository: repository,
+      corsOrigins: ["https://localhost"],
+    });
+    const response = await testApp.request("/health/database", {
+      headers: { Origin: "https://attacker.example" },
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(repository.checkHealth).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { origin: "http://localhost", expectedHeader: "http://localhost" },
+    { origin: undefined, expectedHeader: null },
+  ])("allows same-origin and Origin-less local requests", async ({ origin, expectedHeader }) => {
+    const testApp = createApp({ personalDataRepository: makeRepository(), corsOrigins: [] });
+    const response = await testApp.request("http://localhost/health", {
+      headers: origin ? { Origin: origin } : undefined,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(expectedHeader);
   });
 
   it("declares UTF-8 for JSON responses", async () => {
@@ -110,6 +136,107 @@ describe("HTTP responses", () => {
       error: "PAYLOAD_TOO_LARGE",
       message: "请求内容过大",
     });
+  });
+
+  it("applies the same request body limit to tRPC", async () => {
+    const response = await app.request("/trpc/unknown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: "x".repeat(300_000) }),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({ error: "PAYLOAD_TOO_LARGE" });
+  });
+
+  it.each([
+    "/api/agent/session",
+    "/api/agent/chat",
+    "/api/workflow/cycle",
+  ])("returns 400 for malformed JSON at %s", async (path) => {
+    const testApp = createApp({ personalDataRepository: makeRepository() });
+    const response = await testApp.request(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "INVALID_JSON",
+      message: "请求内容不是有效 JSON",
+    });
+  });
+
+  it("returns 429 with Retry-After when the public Agent guard denies work", async () => {
+    const testApp = createApp({
+      personalDataRepository: makeRepository(),
+      agentTrafficGuard: {
+        enter: () => ({ allowed: false, retryAfterSeconds: 7 }),
+      },
+    });
+    const response = await testApp.request("/api/agent/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("7");
+    await expect(response.json()).resolves.toMatchObject({ error: "RATE_LIMITED" });
+  });
+
+  it("releases Agent concurrency capacity when request processing fails", async () => {
+    const release = vi.fn();
+    const testApp = createApp({
+      personalDataRepository: makeRepository(),
+      agentTrafficGuard: {
+        enter: () => ({ allowed: true, release }),
+      },
+    });
+    const response = await testApp.request("/api/agent/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+
+    expect(response.status).toBe(400);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("returns 503 when online mode lacks required OpenTrek configuration", async () => {
+    const original = {
+      mode: env.OPENTREK_MODE,
+      baseUrl: env.OPENTREK_BASE_URL,
+      appKey: env.OPENTREK_APP_KEY,
+      agentCode: env.OPENTREK_AGENT_CODE,
+      agentVersion: env.OPENTREK_AGENT_VERSION,
+    };
+    env.OPENTREK_MODE = "online";
+    env.OPENTREK_BASE_URL = undefined;
+    env.OPENTREK_APP_KEY = undefined;
+    env.OPENTREK_AGENT_CODE = undefined;
+    env.OPENTREK_AGENT_VERSION = undefined;
+    try {
+      const testApp = createApp({ personalDataRepository: makeRepository() });
+      const response = await testApp.request("/api/agent/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: "OPENTREK_UNAVAILABLE",
+        message: "OpenTrek 在线服务尚未正确配置",
+      });
+    } finally {
+      env.OPENTREK_MODE = original.mode;
+      env.OPENTREK_BASE_URL = original.baseUrl;
+      env.OPENTREK_APP_KEY = original.appKey;
+      env.OPENTREK_AGENT_CODE = original.agentCode;
+      env.OPENTREK_AGENT_VERSION = original.agentVersion;
+    }
   });
 
   it.each([

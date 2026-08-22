@@ -6,14 +6,21 @@ import {
   sanitizeAgentMemoryContext,
   type AgentMemoryContextItem,
 } from "../services/agent-memory.js";
-import { isCrisisMessage } from "../services/offline-assistant.js";
+import {
+  isCrisisMessage,
+  isSensitiveMemoryContent,
+} from "../services/offline-assistant.js";
 import type {
   CreateAgentSessionInput,
   CreateAgentSessionResult,
   RunAgentInput,
   RunAgentResult,
 } from "../contracts/agent.js";
-import { knowledgeSourceSchema } from "../contracts/agent.js";
+import {
+  agentSessionCodeSchema,
+  knowledgeSourceSchema,
+  memoryCandidateSchema,
+} from "../contracts/agent.js";
 
 const createSessionResponseSchema = z.object({
   success: z.boolean(),
@@ -69,53 +76,44 @@ export class OpenTrekError extends Error {
 
 class RetryableOpenTrekError extends OpenTrekError {}
 
-function responseErrorDetails(raw: unknown): {
-  message?: string;
-  code?: string | null;
-} {
+function responseErrorCode(raw: unknown): string | null | undefined {
   if (!raw || typeof raw !== "object") {
-    return {};
+    return undefined;
   }
 
-  const errorMsg = Reflect.get(raw, "errorMsg");
   const errorCode = Reflect.get(raw, "errorCode");
-  return {
-    message: typeof errorMsg === "string" && errorMsg ? errorMsg : undefined,
-    code:
-      typeof errorCode === "string" || errorCode === null
-        ? errorCode
-        : undefined,
-  };
+  if (errorCode === null) return null;
+  return typeof errorCode === "string"
+    && /^[A-Za-z0-9_.:-]{1,100}$/.test(errorCode)
+    ? errorCode
+    : undefined;
 }
 
 function httpError(
   operation: OpenTrekOperation,
   response: Response,
   raw: unknown,
-  contentType: string,
 ): OpenTrekError {
-  const details = responseErrorDetails(raw);
+  const code = responseErrorCode(raw);
   const status = response.status;
 
   if (status === 401 || status === 403) {
     return new OpenTrekError(
       `OpenTrek ${operation} authorization failed (HTTP ${status}); check OPENTREK_APP_KEY and space permissions`,
       status,
-      details.code,
+      code,
     );
   }
 
   const fallback =
     status === 404
-      ? `OpenTrek ${operation} returned HTTP 404 (${contentType}); check OPENTREK_BASE_URL and gateway routing`
+      ? `OpenTrek ${operation} returned HTTP 404; check OPENTREK_BASE_URL and gateway routing`
       : `OpenTrek ${operation} failed (HTTP ${status})`;
-  const message = details.message ?? fallback;
-
   if (status >= 500) {
-    return new RetryableOpenTrekError(message, status, details.code);
+    return new RetryableOpenTrekError(fallback, status, code);
   }
 
-  return new OpenTrekError(message, status, details.code);
+  return new OpenTrekError(fallback, status, code);
 }
 
 async function readResponseJson(
@@ -133,11 +131,11 @@ async function readResponseJson(
     if (response.ok || response.status >= 500) {
       throw new RetryableOpenTrekError(message, response.status);
     }
-    throw httpError(operation, response, undefined, contentType);
+    throw httpError(operation, response, undefined);
   }
 
   if (!response.ok) {
-    throw httpError(operation, response, raw, contentType);
+    throw httpError(operation, response, raw);
   }
 
   return raw;
@@ -164,9 +162,7 @@ function normalizeAttemptError(
     return timeoutError(operation, totalTimeoutMs);
   }
   return new RetryableOpenTrekError(
-    `OpenTrek ${operation} network error: ${
-      error instanceof Error ? error.message : "request failed"
-    }`,
+    `OpenTrek ${operation} network request failed`,
   );
 }
 
@@ -271,13 +267,22 @@ export async function createOpenTrekSession(
 
       if (!parsed.data.success || !parsed.data.data) {
         throw new RetryableOpenTrekError(
-          parsed.data.errorMsg || "OpenTrek createSession returned no session",
+          "OpenTrek createSession returned no session",
           response.status,
-          parsed.data.errorCode,
+          responseErrorCode(parsed.data),
         );
       }
 
-      return { sessionCode: parsed.data.data.uniqueCode };
+      const sessionCode = agentSessionCodeSchema.safeParse(
+        parsed.data.data.uniqueCode,
+      );
+      if (!sessionCode.success) {
+        throw new RetryableOpenTrekError(
+          "OpenTrek createSession returned an invalid session identifier",
+          response.status,
+        );
+      }
+      return { sessionCode: sessionCode.data };
     },
   );
 }
@@ -308,7 +313,6 @@ export async function runOpenTrekAgent(
           message: {
             text,
             metadata,
-            attachments: input.attachments,
           },
         }),
         signal,
@@ -326,16 +330,16 @@ export async function runOpenTrekAgent(
       const result = parsed.data;
       if (!result.success) {
         throw new RetryableOpenTrekError(
-          result.errorMsg || "OpenTrek run returned success=false",
+          "OpenTrek run returned success=false",
           response.status,
-          result.errorCode,
+          responseErrorCode(result),
         );
       }
       if (!result.data?.message) {
         throw new RetryableOpenTrekError(
           "OpenTrek run response did not contain a message",
           response.status,
-          result.errorCode,
+          responseErrorCode(result),
         );
       }
 
@@ -348,7 +352,7 @@ export async function runOpenTrekAgent(
         throw new RetryableOpenTrekError(
           "OpenTrek run response did not contain text content",
           response.status,
-          result.errorCode,
+          responseErrorCode(result),
         );
       }
 
@@ -364,50 +368,14 @@ export async function runOpenTrekAgent(
   );
 }
 
-const protectedAgentMetadataKeys = new Set([
-  "currentPhase",
-  "phaseName",
-  "isBufferMode",
-  "dayOfCycle",
-  "daysToNextPeriod",
-  "energyValue",
-  "cycleLength",
-  "memoryContext",
-  "memory_context",
-  "savedMemoryContext",
-  "saved_memory_context",
-  "longTermMemoryContext",
-  "long_term_memory_context",
-]);
-
-const protectedMemoryMetadataKeys = new Set([
-  "memorycontext",
-  "savedmemorycontext",
-  "longtermmemorycontext",
-  "memoryitems",
-  "usagepolicy",
-  "memoryusagepolicy",
-  "savedmemoryusagepolicy",
-  "hassavedmemorycontext",
-  "memoryused",
-  "memorycount",
-]);
-
-function isProtectedMemoryMetadataKey(key: string): boolean {
-  return protectedMemoryMetadataKeys.has(
-    key.replace(/[^a-z0-9]/gi, "").toLowerCase(),
-  );
-}
-
 export function buildAgentMetadata(
   input: RunAgentInput,
 ): Record<string, unknown> {
-  const metadata = Object.fromEntries(
-    Object.entries(input.metadata).filter(
-      ([key]) => !protectedAgentMetadataKeys.has(key)
-        && !isProtectedMemoryMetadataKey(key),
-    ),
-  );
+  // Client metadata is untrusted. intentHint is the sole client-controlled
+  // field currently supported by the workflow; cycle/check-in/history values
+  // below are rebuilt from their validated first-class inputs.
+  const intentHint = boundedMetadataString(input.metadata.intentHint);
+  const metadata: Record<string, unknown> = intentHint ? { intentHint } : {};
 
   const checkinMetadata = input.dailyCheckin?.shareWithChat
     ? {
@@ -478,24 +446,38 @@ export function buildAgentInputText(
 export function normalizeAgentMetadata(
   rawMetadata: Record<string, unknown>,
 ): Record<string, unknown> {
-  const metadata = Object.fromEntries(
-    Object.entries(rawMetadata).filter(
-      ([key]) => !isProtectedMemoryMetadataKey(key),
-    ),
-  );
+  // This is a trust boundary: upstream metadata is never copied wholesale.
+  // Only fields consumed by the product contract are reconstructed below.
+  const metadata: Record<string, unknown> = {};
+  if (rawMetadata.schemaVersion === "1") metadata.schemaVersion = "1";
+  const workflowVersion = boundedMetadataString(rawMetadata.workflowVersion);
+  if (workflowVersion) metadata.workflowVersion = workflowVersion;
   const intent = typeof rawMetadata.intent === "string"
     ? rawMetadata.intent.trim()
     : "";
-  if (intent !== "memory_request") {
-    delete metadata.memoryCandidate;
-    delete metadata.memory_candidate;
+  if (intent && intent.length <= 100) metadata.intent = intent;
+  const strategy = boundedMetadataString(rawMetadata.strategy);
+  const action = boundedMetadataString(rawMetadata.action);
+  if (strategy) metadata.strategy = strategy;
+  if (action) metadata.action = action;
+
+  if (intent === "memory_request") {
+    const candidate = memoryCandidateSchema.safeParse(
+      rawMetadata.memoryCandidate ?? rawMetadata.memory_candidate,
+    );
+    if (
+      candidate.success
+      && !isSensitiveMemoryContent(candidate.data.summary)
+    ) metadata.memoryCandidate = candidate.data;
   }
-  const rawSources = rawMetadata.sources;
+
+  const rawSources = sourceArray(rawMetadata.sources);
   if (
     intent === "safety_crisis"
     || intent === "crisis_support"
-    || !Array.isArray(rawSources)
+    || rawMetadata.ragUsed !== true
   ) {
+    metadata.ragUsed = false;
     metadata.sources = [];
     return metadata;
   }
@@ -503,10 +485,10 @@ export function normalizeAgentMetadata(
   const seen = new Set<string>();
   const sources = [];
   for (const rawSource of rawSources) {
-    const parsed = knowledgeSourceSchema.safeParse(rawSource);
-    if (!parsed.success || seen.has(parsed.data.sourceId)) continue;
-    seen.add(parsed.data.sourceId);
-    const { url: unsafeUrl, ...safeFields } = parsed.data;
+    const normalized = normalizeUpstreamSource(rawSource);
+    if (!normalized || seen.has(normalized.sourceId)) continue;
+    seen.add(normalized.sourceId);
+    const { url: unsafeUrl, ...safeFields } = normalized;
     const safeUrl = unsafeUrl
       ? sanitizeSourceUrl(unsafeUrl)
       : undefined;
@@ -516,8 +498,124 @@ export function normalizeAgentMetadata(
     });
     if (sources.length === 3) break;
   }
+  if (sources.length === 0) {
+    metadata.ragUsed = false;
+    metadata.sources = [];
+    return metadata;
+  }
+  metadata.ragUsed = true;
   metadata.sources = sources;
   return metadata;
+}
+
+/**
+ * OpenTrek retrieval nodes expose provider-shaped fields (for example
+ * `itemId`, `fileName`, and `chunkContent`) unless a workflow script maps them
+ * to the Lutealark source contract. Accept a small, documented alias set at
+ * this boundary so a renderer can be upgraded without silently losing valid
+ * evidence. The RAG flag and the required source id/title are still strict.
+ */
+function sourceArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  // Some renderers serialize a list metadata field as JSON text. Parsing it
+  // does not create evidence: every item still needs a real id/title below.
+  if (typeof value === "string") {
+    if (value.length > 200_000) return [];
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return sourceArray(parsed);
+    } catch {
+      return [];
+    }
+  }
+  if (!isRecord(value)) return [];
+  // Retrieval nodes in the platform commonly wrap their list in `data`;
+  // custom scripts may use one of these equivalent list labels. Unwrap only
+  // one named container and let each item pass normalizeUpstreamSource.
+  for (const key of [
+    "data", "results", "items", "records", "list",
+    "retrievalResults", "searchResults",
+  ] as const) {
+    if (value[key] !== undefined && value[key] !== value) {
+      return sourceArray(value[key]);
+    }
+  }
+  return [];
+}
+
+function normalizeUpstreamSource(value: unknown) {
+  if (!isRecord(value)) return null;
+
+  const sourceId = sourceString(firstValue(value, [
+    "sourceId", "source_id", "id", "itemId", "item_id",
+    "documentId", "document_id", "docId", "doc_id", "fileId", "file_id",
+  ]), 200);
+  const title = sourceString(firstValue(value, [
+    "title", "name", "fileName", "file_name", "documentName",
+    "document_name", "docName", "doc_name",
+  ]), 300);
+  if (!sourceId || !title) return null;
+
+  const candidate: Record<string, unknown> = { sourceId, title };
+  const url = sourceString(firstValue(value, [
+    "url", "href", "fileUrl", "file_url", "fileAddress", "file_address",
+    "documentUrl", "document_url",
+  ]), 2_000);
+  if (url) candidate.url = url;
+  const chunkId = sourceString(firstValue(value, [
+    "chunkId", "chunk_id",
+  ]), 200);
+  if (chunkId) candidate.chunkId = chunkId;
+  const excerpt = sourceString(firstValue(value, [
+    "excerpt", "snippet", "chunkContent", "chunk_content", "content", "text",
+  ]), 600);
+  if (excerpt) candidate.excerpt = excerpt;
+
+  const score = firstValue(value, [
+    "score", "recallScore", "recall_score", "rerankScore", "rerank_score",
+    "vecScore", "vec_score", "esScore", "es_score", "similarity",
+  ]);
+  if (typeof score === "number" && Number.isFinite(score)) {
+    candidate.score = score;
+  }
+
+  const parsed = knowledgeSourceSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function firstValue(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): unknown {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (candidate !== undefined && candidate !== null) return candidate;
+  }
+  return undefined;
+}
+
+function sourceString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized && normalized.length <= maxLength ? normalized : undefined;
+  }
+  // IDs are occasionally emitted as integer fields by retrieval nodes. Keep
+  // this conversion narrow; titles, URLs and excerpts remain strings only.
+  if (maxLength === 200 && typeof value === "number"
+    && Number.isSafeInteger(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function boundedMetadataString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= 100 ? normalized : undefined;
 }
 
 function sanitizeSourceUrl(value: string): string | undefined {

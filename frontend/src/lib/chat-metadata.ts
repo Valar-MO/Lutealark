@@ -58,18 +58,23 @@ function parseChatMetadataValue(
   const intent = stringValue(metadata.intent)
   const crisisIntent = intent === 'safety_crisis' || intent === 'crisis_support'
   const mode = metadata.mode === 'offline' ? 'offline' : metadata.mode === 'online' ? 'online' : undefined
+  const parsedSources = crisisIntent ? [] : parseKnowledgeSources(metadata.sources)
+  const hasAuthoritativeSource = parsedSources.some((source) => Boolean(source.sourceId))
+  const hasVerifiedRag = mode === 'online' && metadata.ragUsed === true && hasAuthoritativeSource
   return {
     intent,
     action: stringValue(metadata.action),
     mode,
     ragUsed: crisisIntent || mode === 'offline'
       ? false
-      : metadata.ragUsed === true
+      : hasVerifiedRag
         ? true
         : metadata.ragUsed === false
           ? false
           : undefined,
-    sources: crisisIntent ? [] : parseKnowledgeSources(metadata.sources),
+    // Sources without an explicit RAG assertion are not evidence and must not
+    // be rendered as though they came from a verified retrieval run.
+    sources: hasVerifiedRag ? parsedSources : [],
     memoryCandidate: intent === 'memory_request'
       ? parseMemoryCandidate(metadata.memoryCandidate ?? metadata.memory_candidate)
       : undefined,
@@ -120,7 +125,9 @@ function normalizeSource(value: unknown): KnowledgeSource | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
 
   const source = value as Record<string, unknown>
-  const title = firstString(source.title, source.name, source.fileName, source.documentName, source.sourceId)
+  const sourceId = firstString(source.sourceId, source.id)?.slice(0, 200)
+  if (!sourceId) return null
+  const title = firstString(source.title, source.name, source.fileName, source.documentName, sourceId)
     ?.slice(0, 200)
   if (!title) return null
 
@@ -132,7 +139,7 @@ function normalizeSource(value: unknown): KnowledgeSource | null {
 
   return {
     title,
-    sourceId: firstString(source.sourceId, source.id)?.slice(0, 200),
+    sourceId,
     chunkId: firstString(source.chunkId)?.slice(0, 200),
     excerpt: firstString(source.excerpt, source.snippet, source.chunkContent)?.slice(0, 500),
     url,

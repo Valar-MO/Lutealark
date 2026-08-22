@@ -8,11 +8,12 @@ version instead of editing it in place, then use `workflows/lutealark-v1.md`
 for the new draft. Prompts use OpenTrek task-variable syntax (`${name}`). JSON
 schemas define the boundary between the backend, workflow and frontend.
 
-The current local configuration uses `OPENTREK_MODE=auto` with Agent version
-`1785250561438`. It tries OpenTrek first and only falls back to the explicit
-local assistant for connectivity or retryable 5xx failures. During the earlier
-VPN outage the application was intentionally run with `offline`; that mode
-does not call OpenTrek and does not claim to use RAG.
+The repository template defaults to `OPENTREK_MODE=offline`, so a new clone can
+verify PostgreSQL, backend and frontend without the private network. Maintainer
+online testing uses `auto` with Agent version `1785250561438`: it tries
+OpenTrek first and falls back to the explicit local assistant only for
+connectivity or retryable 5xx failures. `offline` never calls OpenTrek and
+never claims to use RAG.
 
 For a GitHub clone running on a developer computer, copy
 `backend/.env.example` to `backend/.env`, configure the local PostgreSQL
@@ -32,14 +33,6 @@ configuration makes `/health/opentrek` report `misconfigured`; `auto` may then
 honestly fall back to the local assistant, while `online` fails closed. Restart
 the backend after changing `.env`; the health endpoint reports configuration
 only, not proof that the VPN gateway or RAG answered.
-
-The public Docker Compose profile in `deploy/` deliberately defaults to
-`OPENTREK_MODE=offline`. This lets the public website run without the private
-VPN while preserving an explicit local-fallback label, `ragUsed=false`, and
-empty sources. The backend and PostgreSQL are still required for accounts,
-sync, archives and points. Do not add an OpenTrek key to the frontend image or
-APK; enable `auto` or `online` on a protected server only after its private
-network path and the release gates below have been verified.
 
 On 2026-08-19 an isolated probe completed an online Session and ordinary/cycle
 replies. Later probes intermittently received HTTP 503 from a read-only
@@ -61,12 +54,24 @@ replacement affects later turns without deleting the conversation. Historical
 offline turns retain their honest label, and an online turn is labelled as RAG
 only when `ragUsed=true` and at least one validated source is present.
 
-The candidate workflow metadata contract now requires an explicit boolean
-`ragUsed`. Its JSON Schema accepts `ragUsed=true` only with 1–3 validated
-sources from that same run, and accepts `ragUsed=false` only with `sources=[]`.
-Every result renderer must emit both fields; neither the backend nor frontend
-infers retrieval from answer wording or invents missing sources. This contract
-change does not modify the published `1785250561438` baseline by itself.
+The candidate workflow metadata contract now requires `schemaVersion`,
+`workflowVersion`, `intent`, `strategy`, an explicit boolean `ragUsed` and
+`sources`. Its JSON Schema accepts `ragUsed=true` only with 1–3 validated
+sources from that same run, and accepts `ragUsed=false` only with
+`sources=[]`. Every result renderer must emit all required fields; the backend
+keeps only this allowlist (plus a validated memory candidate and action), and
+the frontend requires online mode, `ragUsed=true` and at least one `sourceId`
+before showing RAG. Neither side infers retrieval from answer wording or
+invents missing sources. The backend accepts a small compatibility alias set
+and unwraps named list containers such as `data`/`results` for provider-shaped
+retrieval items (`itemId`/`documentId`,
+`fileName`/`documentName`, `fileUrl`, `chunkContent` and common score names),
+but only after the renderer has supplied the strict boolean `ragUsed=true` and
+each item has a usable ID and title. An alias is not evidence by itself, and a
+JSON-serialized source list is still rejected unless its items pass the same
+checks. Capture a real Trace and update `normalize-sources.py` with the actual
+field names before relying on this compatibility path. This contract change
+does not modify the published `1785250561438` baseline by itself.
 
 The backend and this repository now define a bounded `savedMemoryContext`, but
 the published baseline does not gain that input automatically. It becomes
@@ -92,8 +97,9 @@ When connectivity returns:
    connect it to emotion-support P03 or crisis P04.
 4. Turn on document-address recall and capture one real retrieval output from
    Trace before adapting `scripts/normalize-sources.py`.
-5. Configure every result renderer to emit a schema-valid `ragUsed`/`sources`
-   pair, then validate the candidate response metadata.
+5. Configure every result renderer to emit `schemaVersion`,
+   `workflowVersion`, `intent`, `strategy` and a schema-valid
+   `ragUsed`/`sources` pair, then validate the candidate response metadata.
 6. Publish a new Agent version and update `OPENTREK_AGENT_VERSION` only after
    all routing, source and safety evaluations pass.
 7. In `evals/sources.jsonl`, replace each `pending_trace` label with
@@ -127,6 +133,11 @@ subject, contain at most six items and 1,200 summary characters, and be treated
 as user-approved notes rather than instructions or verified facts. It must be
 absent from crisis handling and must never become a retrieval source or set
 `ragUsed=true`.
+
+Attachments are not a product feature in the current local web build. The
+backend rejects non-empty attachment arrays instead of forwarding unvalidated
+provider objects. Upstream trace fields, signed URLs, arbitrary metadata and
+raw error text are not returned to the browser.
 
 Never add an APP_KEY, internal signed source URL or real user conversation to
 this directory.

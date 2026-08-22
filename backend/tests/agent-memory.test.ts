@@ -52,6 +52,8 @@ describe("trusted agent memory context", () => {
       memory("我最近睡不好"),
       memory("我今天状态很好"),
       memory("I am anxious today"),
+      memory("我有抑郁症"),
+      memory("我的检验结果和血压记录"),
     ]);
 
     await expect(loadAgentMemoryContext(
