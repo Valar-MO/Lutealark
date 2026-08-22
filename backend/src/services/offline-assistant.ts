@@ -370,9 +370,19 @@ function memoryKind(summary: string): "preference" | "constraint" | "long_term_g
 }
 
 export function isCrisisMessage(message: string): boolean {
-  return matches(normalize(message), [
+  const normalized = normalize(message);
+  return matches(normalized, [
     /自杀|轻生|不想活|想死|求死|结束生命|伤害自己|自残|活不下去|去死|永远消失|跳楼|跳河|跳海|割腕|上吊|吞药/,
     /kill\s*(?:myself|me)|suicid|self[- ]?harm|end\s+my\s+life|i\s*(?:want|wanna|plan|intend|am\s+going)\s+to\s+die/i,
+    // Indirect safety disclosures still need the crisis boundary. The
+    // immediate/first-person qualifiers avoid classifying generic statements
+    // such as "环境不安全" as self-harm intent.
+    /(?:我(?:现在|此刻|目前)?(?:感觉|觉得)?|现在|此刻|目前)不安全/,
+    /(?:我)?(?:无法|不能|没法|保证不了)(?:保证)?(?:自己)?安全/,
+    /(?:手边|身边|旁边|附近).{0,16}(?:药|刀|绳|枪|工具).{0,24}(?:怕|担心|控制不住|忍不住|会用|想用)/,
+    /(?:控制不住|忍不住).{0,20}(?:伤害自己|自杀|自残|吞药|用药)/,
+    /(?:准备|正在|已经|马上|计划|打算).{0,12}(?:伤害自己|自杀|自残|结束生命)/,
+    /(?:i\s*(?:am|feel)\s*(?:not\s+safe|unsafe)|can't\s+keep\s+myself\s+safe|pills?.{0,30}(?:afraid|scared|control))/i,
   ]);
 }
 
@@ -390,7 +400,8 @@ function crisisSupportResult(sessionCode: string): RunAgentResult {
       "离线基础支持不能替代紧急救援或专业医疗帮助。",
     ].join("\n\n"),
     "crisis_support",
-    "seek_immediate_help",
+    undefined,
+    { strategy: "none" },
   );
 }
 

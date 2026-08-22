@@ -245,6 +245,31 @@ describe('OpenTrek reconnection', () => {
 
     await expect(reconnectAgentSession()).resolves.toBe('online-session')
   })
+
+  it('does not let a superseded request failure clear the active session request', async () => {
+    const storage = memoryStorage({ 'lutealark.device-id.v1': DEVICE_ID })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    })
+    let rejectOld: ((cause: Error) => void) | undefined
+    let resolveCurrent: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => { rejectOld = reject }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveCurrent = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const oldRequest = createAgentSession(true)
+    const currentRequest = createAgentSession(true)
+    rejectOld?.(new Error('old request failed'))
+    await expect(oldRequest).rejects.toThrow('无法连接服务')
+
+    expect(createAgentSession()).toBe(currentRequest)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    resolveCurrent?.(jsonResponse({ sessionCode: 'current-session' }))
+    await expect(currentRequest).resolves.toBe('current-session')
+  })
 })
 
 function jsonResponse(body: unknown, status = 200) {

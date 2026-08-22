@@ -67,7 +67,7 @@ export function createAgentSession(forceNew = false): Promise<string> {
   if (forceNew) sessionPromise = null
   if (sessionPromise) return sessionPromise
 
-  sessionPromise = requestJson<SessionResponse>('/api/agent/session', {
+  const operation = requestJson<SessionResponse>('/api/agent/session', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -77,11 +77,14 @@ export function createAgentSession(forceNew = false): Promise<string> {
   }, SESSION_TIMEOUT_MS)
     .then((result) => result.sessionCode)
     .catch((error) => {
-      sessionPromise = null
+      // A force-new request can replace this operation while it is still in
+      // flight. A late failure from the old request must not clear the newer
+      // subject's cached Session promise.
+      if (sessionPromise === operation) sessionPromise = null
       throw error
     })
-
-  return sessionPromise
+  sessionPromise = operation
+  return operation
 }
 
 export function sendAgentMessage(

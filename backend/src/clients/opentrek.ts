@@ -61,7 +61,57 @@ const runResponseSchema = z.object({
 });
 
 const MAX_ATTEMPTS = 2;
+const MAX_OPENTREK_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_SOURCE_CONTAINER_DEPTH = 8;
 type OpenTrekOperation = "createSession" | "run";
+
+const AGENT_INTENTS = new Set([
+  "task_difficulty",
+  "cycle_question",
+  "emotion_support",
+  "daily_checkin",
+  "memory_request",
+  "safety_crisis",
+  "smalltalk",
+]);
+const AGENT_STRATEGIES = new Set([
+  "none",
+  "task_breakdown",
+  "pomodoro",
+  "environment",
+  "micro_movement",
+  "breathing",
+]);
+const AGENT_ACTIONS = new Set([
+  "offer_breathing",
+  "open_breathing",
+  "offer_focus_timer",
+  "open_focus_timer",
+  "open_light_plan",
+  "open_cycle",
+  "show_environment_reset",
+  "show_micro_movement",
+  "offer_daily_checkin",
+  "open_daily_checkin",
+]);
+// OpenTrek workflows have historically used a few names that differ from the
+// product contract. Normalize them at this trust boundary so every downstream
+// consumer sees one stable vocabulary. These aliases are accepted only as
+// input; the published schema continues to advertise canonical values.
+const AGENT_INTENT_ALIASES = new Map([
+  ["crisis_support", "safety_crisis"],
+  ["emotional_support", "emotion_support"],
+]);
+const AGENT_ACTION_ALIASES = new Map([
+  ["open_pomodoro", "open_focus_timer"],
+  ["open_environment_reset", "show_environment_reset"],
+  ["open_micro_movement", "show_micro_movement"],
+]);
+const RAG_INTENTS = new Set([
+  "task_difficulty",
+  "cycle_question",
+  "emotion_support",
+]);
 
 export class OpenTrekError extends Error {
   constructor(
@@ -121,7 +171,7 @@ async function readResponseJson(
   response: Response,
 ): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "unknown";
-  const responseText = await response.text();
+  const responseText = await readBoundedResponseText(operation, response);
   let raw: unknown;
 
   try {
@@ -139,6 +189,50 @@ async function readResponseJson(
   }
 
   return raw;
+}
+
+async function readBoundedResponseText(
+  operation: OpenTrekOperation,
+  response: Response,
+): Promise<string> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength && /^\d+$/.test(declaredLength)
+    && Number(declaredLength) > MAX_OPENTREK_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw responseTooLargeError(operation, response);
+  }
+
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let receivedBytes = 0;
+  let responseText = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedBytes += value.byteLength;
+      if (receivedBytes > MAX_OPENTREK_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw responseTooLargeError(operation, response);
+      }
+      responseText += decoder.decode(value, { stream: true });
+    }
+    responseText += decoder.decode();
+    return responseText;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function responseTooLargeError(
+  operation: OpenTrekOperation,
+  response: Response,
+): OpenTrekError {
+  const message = `OpenTrek ${operation} response exceeded the 2 MiB limit (HTTP ${response.status})`;
+  return response.ok || response.status >= 500
+    ? new RetryableOpenTrekError(message, response.status)
+    : httpError(operation, response, undefined);
 }
 
 function timeoutError(
@@ -452,12 +546,18 @@ export function normalizeAgentMetadata(
   if (rawMetadata.schemaVersion === "1") metadata.schemaVersion = "1";
   const workflowVersion = boundedMetadataString(rawMetadata.workflowVersion);
   if (workflowVersion) metadata.workflowVersion = workflowVersion;
-  const intent = typeof rawMetadata.intent === "string"
-    ? rawMetadata.intent.trim()
-    : "";
-  if (intent && intent.length <= 100) metadata.intent = intent;
-  const strategy = boundedMetadataString(rawMetadata.strategy);
-  const action = boundedMetadataString(rawMetadata.action);
+  const intent = enumMetadataString(
+    rawMetadata.intent,
+    AGENT_INTENTS,
+    AGENT_INTENT_ALIASES,
+  ) ?? "";
+  if (intent) metadata.intent = intent;
+  const strategy = enumMetadataString(rawMetadata.strategy, AGENT_STRATEGIES);
+  const action = enumMetadataString(
+    rawMetadata.action,
+    AGENT_ACTIONS,
+    AGENT_ACTION_ALIASES,
+  );
   if (strategy) metadata.strategy = strategy;
   if (action) metadata.action = action;
 
@@ -472,11 +572,18 @@ export function normalizeAgentMetadata(
   }
 
   const rawSources = sourceArray(rawMetadata.sources);
-  if (
-    intent === "safety_crisis"
-    || intent === "crisis_support"
-    || rawMetadata.ragUsed !== true
-  ) {
+  if (intent === "safety_crisis") {
+    // A malformed crisis renderer must not smuggle a normal tool/action into
+    // the safety UI. Keep the schema-required neutral strategy and remove any
+    // ordinary action or memory candidate.
+    metadata.strategy = "none";
+    delete metadata.action;
+    delete metadata.memoryCandidate;
+    metadata.ragUsed = false;
+    metadata.sources = [];
+    return metadata;
+  }
+  if (!RAG_INTENTS.has(intent) || rawMetadata.ragUsed !== true) {
     metadata.ragUsed = false;
     metadata.sources = [];
     return metadata;
@@ -515,15 +622,24 @@ export function normalizeAgentMetadata(
  * this boundary so a renderer can be upgraded without silently losing valid
  * evidence. The RAG flag and the required source id/title are still strict.
  */
-function sourceArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
+function sourceArray(value: unknown, depth = 0): unknown[] {
+  if (depth > MAX_SOURCE_CONTAINER_DEPTH) return [];
+  if (Array.isArray(value)) {
+    // A provider may include a non-empty diagnostic/error list before the
+    // actual retrieval list. Treat a wrapper as usable only when at least one
+    // item already satisfies the source identity/title contract; otherwise
+    // continue looking through later named wrappers.
+    return value.some((item) => normalizeUpstreamSource(item) !== null)
+      ? value
+      : [];
+  }
   // Some renderers serialize a list metadata field as JSON text. Parsing it
   // does not create evidence: every item still needs a real id/title below.
   if (typeof value === "string") {
     if (value.length > 200_000) return [];
     try {
       const parsed: unknown = JSON.parse(value);
-      return sourceArray(parsed);
+      return sourceArray(parsed, depth + 1);
     } catch {
       return [];
     }
@@ -537,7 +653,8 @@ function sourceArray(value: unknown): unknown[] {
     "retrievalResults", "searchResults",
   ] as const) {
     if (value[key] !== undefined && value[key] !== value) {
-      return sourceArray(value[key]);
+      const nested = sourceArray(value[key], depth + 1);
+      if (nested.length > 0) return nested;
     }
   }
   return [];
@@ -546,38 +663,36 @@ function sourceArray(value: unknown): unknown[] {
 function normalizeUpstreamSource(value: unknown) {
   if (!isRecord(value)) return null;
 
-  const sourceId = sourceString(firstValue(value, [
-    "sourceId", "source_id", "id", "itemId", "item_id",
-    "documentId", "document_id", "docId", "doc_id", "fileId", "file_id",
-  ]), 200);
-  const title = sourceString(firstValue(value, [
-    "title", "name", "fileName", "file_name", "documentName",
-    "document_name", "docName", "doc_name",
-  ]), 300);
+  const sourceId = firstSourceString(value, [
+    "sourceId", "source_id", "itemId", "item_id", "documentId",
+    "document_id", "docId", "doc_id", "fileId", "file_id", "id",
+  ], 200);
+  const title = firstSourceString(value, [
+    "title", "fileName", "file_name", "documentName", "document_name",
+    "docName", "doc_name", "name",
+  ], 300);
   if (!sourceId || !title) return null;
 
   const candidate: Record<string, unknown> = { sourceId, title };
-  const url = sourceString(firstValue(value, [
+  const safeUrl = firstSafeSourceUrl(value, [
     "url", "href", "fileUrl", "file_url", "fileAddress", "file_address",
     "documentUrl", "document_url",
-  ]), 2_000);
-  if (url) candidate.url = url;
-  const chunkId = sourceString(firstValue(value, [
+  ]);
+  if (safeUrl) candidate.url = safeUrl;
+  const chunkId = firstSourceString(value, [
     "chunkId", "chunk_id",
-  ]), 200);
+  ], 200);
   if (chunkId) candidate.chunkId = chunkId;
-  const excerpt = sourceString(firstValue(value, [
+  const excerpt = firstSourceString(value, [
     "excerpt", "snippet", "chunkContent", "chunk_content", "content", "text",
-  ]), 600);
+  ], 600);
   if (excerpt) candidate.excerpt = excerpt;
 
-  const score = firstValue(value, [
+  const score = firstBoundedScore(value, [
     "score", "recallScore", "recall_score", "rerankScore", "rerank_score",
     "vecScore", "vec_score", "esScore", "es_score", "similarity",
   ]);
-  if (typeof score === "number" && Number.isFinite(score)) {
-    candidate.score = score;
-  }
+  if (score !== undefined) candidate.score = score;
 
   const parsed = knowledgeSourceSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
@@ -587,13 +702,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function firstValue(
+function firstSourceString(
   value: Record<string, unknown>,
   keys: readonly string[],
-): unknown {
+  maxLength: number,
+): string | undefined {
+  for (const key of keys) {
+    const candidate = sourceString(value[key], maxLength);
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+function firstBoundedScore(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): number | undefined {
   for (const key of keys) {
     const candidate = value[key];
-    if (candidate !== undefined && candidate !== null) return candidate;
+    if (
+      typeof candidate === "number"
+      && Number.isFinite(candidate)
+      && candidate >= 0
+      && candidate <= 1
+    ) return candidate;
+  }
+  return undefined;
+}
+
+function firstSafeSourceUrl(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const candidate = sourceString(value[key], 2_000);
+    if (!candidate) continue;
+    const safe = sanitizeSourceUrl(candidate);
+    if (safe) return safe;
   }
   return undefined;
 }
@@ -616,6 +761,17 @@ function boundedMetadataString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized && normalized.length <= 100 ? normalized : undefined;
+}
+
+function enumMetadataString(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  aliases: ReadonlyMap<string, string> = new Map(),
+): string | undefined {
+  const normalized = boundedMetadataString(value);
+  if (!normalized) return undefined;
+  const canonical = aliases.get(normalized) ?? normalized;
+  return allowed.has(canonical) ? canonical : undefined;
 }
 
 function sanitizeSourceUrl(value: string): string | undefined {

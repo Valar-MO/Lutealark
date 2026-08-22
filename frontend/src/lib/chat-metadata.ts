@@ -12,6 +12,11 @@ const PRIVATE_AGENT_METADATA_KEYS = new Set([
   'savedmemoryusagepolicy',
   'longtermmemorycontext',
 ])
+const RAG_INTENTS = new Set([
+  'task_difficulty',
+  'cycle_question',
+  'emotion_support',
+])
 
 export type ParsedChatMetadata = {
   intent?: string
@@ -60,7 +65,10 @@ function parseChatMetadataValue(
   const mode = metadata.mode === 'offline' ? 'offline' : metadata.mode === 'online' ? 'online' : undefined
   const parsedSources = crisisIntent ? [] : parseKnowledgeSources(metadata.sources)
   const hasAuthoritativeSource = parsedSources.some((source) => Boolean(source.sourceId))
-  const hasVerifiedRag = mode === 'online' && metadata.ragUsed === true && hasAuthoritativeSource
+  const hasVerifiedRag = mode === 'online'
+    && RAG_INTENTS.has(intent ?? '')
+    && metadata.ragUsed === true
+    && hasAuthoritativeSource
   return {
     intent,
     action: stringValue(metadata.action),

@@ -4,6 +4,8 @@ Lutealark 是一个面向 ADHD 女性的周期感知支持系统。它把低压�
 
 > Lutealark 用于日常自我支持，不提供医疗诊断或治疗，也不能替代专业医疗服务或紧急援助。
 
+本仓库只维护在个人电脑浏览器中运行的版本。每位使用者都需要在自己的电脑上运行 PostgreSQL、后端和前端。
+
 [完整功能说明](docs/FEATURES.md) · [前端开发说明](frontend/README.md) · [OpenTrek 工作流与 RAG 验收](opentrek/README.md)
 
 ## 当前状态
@@ -13,10 +15,11 @@ Lutealark 是一个面向 ADHD 女性的周期感知支持系统。它把低压�
 | 本地产品功能 | ✅ 可用 | 周期、对话、呼吸、工具、档案、积分和账号都可在本机运行 |
 | PostgreSQL | ✅ 可用 | 迁移、业务数据同步、账号导出和删号已有自动化覆盖 |
 | 离线助手 | ✅ 可用 | 不访问 OpenTrek，不伪装成 RAG，并明确显示“离线基础支持” |
-| OpenTrek 基线 | 🟠 在线可答，RAG 未确认 | 当前版本为 `1785250561438`；在线回答没有返回可验证的 `ragUsed=true` 和有效来源 |
+| OpenTrek 基线 | 🟠 平台链路不稳定，RAG 未确认 | 当前版本为 `1785250561438`；曾在线回答，但本轮创建 Session 超时，且成功回答时也没有返回可验证的 RAG 来源 |
 | RAG 正式验收 | ⏳ 待平台新版本 | Q01–Q10 还需要同一候选版本的真实 Trace、sourceId 和 Top-3 召回结果 |
 
 `.env` 模板默认使用 `OPENTREK_MODE=offline`，方便第一次运行时先排除 VPN 和平台配置问题。确认本地网页、后端和数据库都正常后，再按本文“连接 OpenTrek”一节切换为 `auto`。
+离线本地运行不需要 VPN；VPN 只在第 10 步进行在线 OpenTrek 测试时需要。
 
 ## 主要功能
 
@@ -96,6 +99,10 @@ node --version
 npm --version
 ```
 
+如果没有 nvm，可以从 [Node.js 官方下载页](https://nodejs.org/en/download)
+安装 macOS 版 Node.js `24.16.0`，安装完成后关闭并重新打开终端，再执行上面的
+`node --version` 和 `npm --version` 检查。不要安装过旧的 Node.js 版本。
+
 安装并启动 PostgreSQL 16：
 
 ```bash
@@ -128,6 +135,11 @@ npm --version
 git clone https://github.com/Valar-MO/Lutealark.git
 cd Lutealark
 ```
+
+上面的命令会获取 GitHub 默认分支。只有项目负责人已经把本次变更合并到默认分支后，
+新同学才应按此命令操作；如果负责人暂时要求测试某个功能分支，请使用负责人提供的
+分支名，例如 `git clone -b <分支名> https://github.com/Valar-MO/Lutealark.git`，
+不要自行猜测分支名。
 
 如果不会使用 Git，也可以在 GitHub 项目页点击 `Code` → `Download ZIP`，解压后：
 
@@ -201,10 +213,11 @@ CREATE DATABASE lutealark;
 Windows 常见连接写法是：
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:你的PostgreSQL密码@127.0.0.1:5432/lutealark
+DATABASE_URL=postgresql://postgres@127.0.0.1:5432/lutealark
 ```
 
-如果密码中包含 `@`、`:`、`/`、`#` 等字符，需要进行 URL 编码；不确定时请让项目负责人协助生成连接字符串，不要把密码发到群聊、GitHub Issue 或截图中。
+如果你的本机 PostgreSQL 要求密码，请只在自己电脑的 `backend/.env` 中按安装程序或
+`psql` 显示的连接信息补充；不要把包含密码的连接字符串发到群聊、GitHub Issue 或截图中。
 
 ### 6. 创建自己的 `backend/.env`
 
@@ -264,7 +277,7 @@ OPENTREK_RETRY_DELAY_MS=250
 
 | 字段 | 来源 |
 |---|---|
-| `DATABASE_URL` | 你自己电脑上的 PostgreSQL；不需要向同事索取 |
+| `DATABASE_URL` | 你自己电脑上的 PostgreSQL；macOS Homebrew 常用 `postgresql://127.0.0.1:5432/lutealark`，Windows 按安装时的用户名和密码填写；不需要向同事索取 |
 | `OPENTREK_BASE_URL` | 项目负责人或 OpenTrek 平台管理员通过私密渠道提供 |
 | `OPENTREK_APP_KEY` | 项目负责人或平台管理员通过私密渠道提供，只能放在本机 `.env` |
 | `OPENTREK_AGENT_CODE` | 项目负责人或平台管理员通过私密渠道提供 |
@@ -458,9 +471,11 @@ npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
 - 数据库：PostgreSQL 16。
 - 智能体：阿里云专有云 OpenTrek Agent Dev V3.2.0。
 - 登录只使用 `HttpOnly; SameSite=Strict` Cookie；数据库只保存会话 Token 的 SHA-256。
+- `X-Lutealark-User-Id` 只可代表尚未注册或认领的匿名设备 UUID；已注册账号 UUID 和已认领设备 UUID 即使格式正确也不会被当作匿名身份，账号数据必须通过有效的 HttpOnly 会话 Cookie 访问。
 - Agent Session 按账号、匿名设备或未标识主体以及在线/离线模式绑定 24 小时，数据库只保存 Session Code 哈希。
+- 会话创建、OpenTrek 重连、聊天发送和同步操作都绑定到发起时的数据主体和登录世代；账号切换后，旧请求的成功、失败和清理回调都不会改写新主体页面。聊天发送还使用同步互斥，连续点击不会在 React 状态更新前重复发起同一轮请求。
 - 周期阶段、积分、身份范围和来源字段由后端校验，不让模型或浏览器任意填写。
-- RAG 来源和长期记忆严格分开；危机分支不注入记忆，也不显示来源。
+- RAG 来源和长期记忆严格分开；危机分支不注入记忆，也不显示来源。恢复历史对话时也会重新校验 RAG 意图，非任务、周期和情绪三类检索意图的来源不会显示。
 - PostgreSQL 保存全量状态和呼吸历史；页面最近 30 条只是显示窗口，不表示删除更早数据。
 - 当前采用应用层用户范围隔离，不是 PostgreSQL RLS。
 
@@ -491,7 +506,7 @@ npm run build
 npm audit
 ```
 
-2026-08-22 本轮实际验证结果：后端 Vitest `20` 个测试文件、`233` 个测试通过（另有 `3` 个数据库相关测试跳过，共 `236` 个测试）；前端 Vitest `14` 个测试文件、`66` 个测试通过；前后端 `check`、`lint`、`build` 均通过；前后端 `npm audit` 均为 `0` 个已知漏洞。全新临时 PostgreSQL 数据库的 5 个迁移全部成功。当前本机旧开发库因历史迁移校验和不同而被保护性拒绝，详见上面的常见问题。OpenTrek 数据集的本地结构校验不会访问 VPN 或平台；它不能替代真实 RAG Trace 和来源召回验收。
+2026-08-22 本轮实际验证结果：后端普通模式为 `19` 个测试文件通过、`1` 个文件按环境跳过，`260` 个测试通过、`4` 个测试跳过（4 个均来自数据库测试文件；共 `264` 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，后端 `20` 个文件、`264` 个测试全部通过。前端 Vitest `15` 个测试文件、`77` 个测试全部通过。前后端 `check`、`lint`、`build` 均通过，前后端 `npm audit` 均为 `0` 个已知漏洞。全新临时 PostgreSQL 数据库的 5 个迁移全部成功；本机离线 HTTP 冒烟测试也实际通过了健康检查、数据库、周期计算、Session 创建和任务问答。当前本机旧开发库因历史迁移校验和不同而被保护性拒绝，详见上面的常见问题。OpenTrek 路由/安全数据的离线结构校验通过，来源集合状态为 `valid_but_not_ready`；最新 `auto` 探测约 11 秒后明确返回离线 Session，周期问题得到 `cycle_question`、`ragUsed=false` 和 0 条来源。这些离线校验和降级结果不能替代真实 RAG Trace 与来源召回验收。
 
 ## OpenTrek RAG 的当前问题与下一步
 
@@ -499,12 +514,14 @@ npm audit
 
 当前已确认：
 
-- 版本 `1785250561438` 可以在线创建 Session 和回答周期问题。
+- 版本 `1785250561438` 历史上曾成功创建在线 Session 并回答周期问题；本轮在相同本机配置下创建 Session 于 10 秒超时，`auto` 模式按设计诚实降级为离线。这说明当前首先要恢复 VPN/网关可达性，不能把 `/health/opentrek` 的 `ready` 配置状态当成平台在线证明。
 - 返回结果没有同时满足 `ragUsed=true` 与 1–3 条有效 `sources`。
-- 前端显示“未确认使用 RAG”是正确的保护，不是用户没有输入到所谓的触发词。
+- 前端显示“未确认使用 RAG”是正确的保护，不是用户没有输入到所谓的触发词；恢复的历史 metadata 也必须通过三类检索意图白名单。
 - 后端只接收受信任的周期/状态上下文；上游 metadata 只保留 `schemaVersion`、`workflowVersion`、意图、策略、动作、合法记忆候选、`ragUsed` 和带 `sourceId` 的来源。
 - `ragUsed=true` 只有在同一次回复存在至少一条有效来源时才会传给前端；否则统一显示未确认，并返回空来源。
-- 后端对来源保留一个受限的 OpenTrek 检索字段兼容层：`data`/`results` 等已命名列表包装会被解开，`itemId`/`documentId` 等可映射为 `sourceId`，`fileName`/`documentName` 可映射为标题，`fileUrl`、`chunkContent` 和常见分数别名也会先经过同样的长度、URL 和类型校验。只有明确的布尔值 `ragUsed=true`、非危机意图以及同时存在来源 ID 和标题时才会保留；别名不会自行触发或证明 RAG。平台 Trace 仍是确定真实字段和来源归属的唯一依据。
+- 在线评估脚本的每条 JSON 结果会同时输出 `actualRagUsed`、实际来源 ID 和通过条件，便于区分“模型声称使用 RAG”和“来源证据完整”；它不会改变通过门槛。
+- 后端对来源保留一个受限的 OpenTrek 检索字段兼容层：`data`/`results` 等已命名列表包装会在有界深度内解开；如果前一个包装为空，或其中没有任何同时具备有效 ID 和标题的条目，会继续检查后续已命名包装；`itemId`/`documentId` 等可映射为 `sourceId`，`fileName`/`documentName` 可映射为标题，`fileUrl`、`chunkContent` 和常见分数别名也会先经过同样的长度、URL 和类型校验。意图别名 `crisis_support`、`emotional_support` 会分别归一为 `safety_crisis`、`emotion_support`；动作别名 `open_pomodoro`、`open_environment_reset`、`open_micro_movement` 会分别归一为 `open_focus_timer`、`show_environment_reset`、`show_micro_movement`。可选字段不合规时只丢弃该字段，不会连带丢弃已有合法 ID/标题的来源。OpenTrek 单次响应体还限制为 2 MiB，避免异常网关响应占用无界内存。只有明确的布尔值 `ragUsed=true`、非危机意图以及同时存在来源 ID 和标题时才会保留；别名不会自行触发或证明 RAG。平台 Trace 仍是确定真实字段和来源归属的唯一依据。
+- RAG 证据只允许出现在 `task_difficulty`、`cycle_question` 和 `emotion_support` 三个检索意图；每日记录、长期记忆、小聊和危机等分支即使上游误传来源，也会被后端清空并显示未确认。危机分支强制保留 Schema 要求的中性 `strategy: "none"`，同时清除普通动作和记忆候选，避免误出现周期、工具或任务入口。意图、策略、动作也按工作流枚举过滤。
 
 正式修复顺序：
 

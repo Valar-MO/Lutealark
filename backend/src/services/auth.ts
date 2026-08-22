@@ -284,9 +284,15 @@ export class AuthService {
     const anonymous = personalDataUserIdSchema.safeParse(
       request.headers.get("X-Lutealark-User-Id"),
     );
-    return anonymous.success
-      ? { authType: "anonymous", userId: anonymous.data }
-      : null;
+    if (!anonymous.success) return null;
+
+    // A device UUID is only an anonymous namespace while it is unclaimed. Do
+    // this check after cookie resolution so a valid account session remains
+    // authoritative even when the browser still sends its old device header.
+    if (!(await this.repository.isAnonymousUserIdAvailable(anonymous.data))) {
+      return null;
+    }
+    return { authType: "anonymous", userId: anonymous.data };
   }
 
   async requireAccountRequestUser(request: Request): Promise<AccountResolvedUser> {

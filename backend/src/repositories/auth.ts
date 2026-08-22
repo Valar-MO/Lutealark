@@ -41,6 +41,8 @@ export interface AccountSessionWrite {
 export interface AuthRepository {
   findAccountByEmail(email: string): Promise<AuthCredential | null>;
   findAccountByUserId(userId: PersonalDataUserId): Promise<AuthCredential | null>;
+  /** True only when the UUID is not an account id and has not been claimed. */
+  isAnonymousUserIdAvailable(userId: PersonalDataUserId): Promise<boolean>;
   registerAccount(input: RegisterAccountWrite): Promise<DataMergeStatus>;
   createAccountSession(input: AccountSessionWrite): Promise<DataMergeStatus>;
   findActiveSession(tokenHash: Buffer, now: Date): Promise<StoredSession | null>;
@@ -690,6 +692,21 @@ export const postgresAuthRepository: AuthRepository = {
         [userId],
       );
       return result.rows[0] ?? null;
+    });
+  },
+
+  async isAnonymousUserIdAvailable(userId) {
+    return withDatabaseClient(async (client) => {
+      const result = await client.query<{ available: boolean }>(
+        `SELECT NOT EXISTS (
+           SELECT 1 FROM auth_accounts WHERE user_id = $1
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM auth_device_claims WHERE device_user_id = $1
+         ) AS available`,
+        [userId],
+      );
+      return result.rows[0]?.available === true;
     });
   },
 

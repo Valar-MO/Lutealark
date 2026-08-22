@@ -18,9 +18,3 @@ __pycache__/
 /*.pdf
 /*.png
 /*.jpg
-
-*.jks
-*.keystore
-*.p12
-key.properties
-google-services.json

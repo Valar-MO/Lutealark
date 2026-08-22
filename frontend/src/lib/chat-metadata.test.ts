@@ -23,6 +23,7 @@ describe('chat metadata', () => {
   it('preserves explicit online RAG status without inventing it', () => {
     expect(parseChatMetadata({
       mode: 'online',
+      intent: 'cycle_question',
       ragUsed: true,
       sources: [{ sourceId: 'source-1', title: '资料' }],
     }).ragUsed).toBe(true)
@@ -33,6 +34,25 @@ describe('chat metadata', () => {
       mode: 'online',
       sources: [{ title: '没有 sourceId 的标题' }],
     }).sources).toEqual([])
+  })
+
+  it.each([
+    'daily_checkin',
+    'memory_request',
+    'smalltalk',
+    'safety_crisis',
+    'unknown_intent',
+    undefined,
+  ])('does not trust RAG metadata for a non-retrieval intent: %s', (intent) => {
+    const parsed = parseChatMetadata({
+      mode: 'online',
+      intent,
+      ragUsed: true,
+      sources: [{ sourceId: 'source-1', title: '不应显示' }],
+    })
+
+    expect(parsed.ragUsed).toBe(intent === 'safety_crisis' ? false : undefined)
+    expect(parsed.sources).toEqual([])
   })
 
   it.each(['safety_crisis', 'crisis_support'])(

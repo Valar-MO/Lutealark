@@ -156,7 +156,7 @@ describe("offline assistant", () => {
 
     expect(response.metadata).toMatchObject({
       intent: "crisis_support",
-      action: "seek_immediate_help",
+      strategy: "none",
     });
     expect(response.content).toContain("120");
     expect(response.content).toContain("110");
@@ -167,16 +167,27 @@ describe("offline assistant", () => {
   it.each([
     "我想死",
     "我准备跳楼",
+    "我不安全",
+    "手边有药，我怕控制不住",
+    "我已经准备伤害自己，现在一个人在房间里",
     "I want to die",
   ])("recognizes an explicit crisis statement: %s", (message) => {
     const response = run(message);
 
     expect(response.metadata).toMatchObject({
       intent: "crisis_support",
-      action: "seek_immediate_help",
+      strategy: "none",
       ragUsed: false,
       sources: [],
     });
+  });
+
+  it.each([
+    "这个环境不安全，我先离开",
+    "I feel not motivated today",
+    "药放在身边，但我会按医嘱服用",
+  ])("does not turn a non-crisis safety phrase into a crisis: %s", (message) => {
+    expect(run(message).metadata.intent).not.toBe("crisis_support");
   });
 
   it("prioritizes crisis safety over a pending tool confirmation", () => {
@@ -187,7 +198,7 @@ describe("offline assistant", () => {
 
     expect(response.metadata).toMatchObject({
       intent: "crisis_support",
-      action: "seek_immediate_help",
+      strategy: "none",
     });
   });
 

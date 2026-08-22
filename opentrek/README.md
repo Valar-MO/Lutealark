@@ -1,7 +1,7 @@
 # OpenTrek configuration package
 
 This directory is the version-controlled source of truth for Lutealark's
-OpenTrek workflow. It does not deploy platform changes automatically.
+OpenTrek workflow. It does not publish platform changes automatically.
 
 The selected published baseline is Agent version `1785250561438`. Clone that
 version instead of editing it in place, then use `workflows/lutealark-v1.md`
@@ -19,8 +19,10 @@ For a GitHub clone running on a developer computer, copy
 `backend/.env.example` to `backend/.env`, configure the local PostgreSQL
 `DATABASE_URL`, run the migration, and start backend and frontend separately.
 Open `http://localhost:5173/cycle` on that same computer. `localhost` is not a
-shared URL; each collaborator must install the dependencies, database, VPN and
-local services independently.
+shared URL; each collaborator must install the dependencies, database and local
+services independently. VPN is only needed for the optional `auto`/`online`
+OpenTrek test below; offline local development does not need the private
+network.
 
 Use `OPENTREK_MODE=offline` to work without the private network. To test the
 published baseline online, connect the authorized VPN first and set the
@@ -44,6 +46,15 @@ did not contain `ragUsed=true` and `sources` was empty. The frontend therefore
 correctly shows “OpenTrek online · RAG unconfirmed”. This verifies online
 answer reachability, not knowledge-base retrieval or authoritative source
 availability.
+In the latest 2026-08-22 probe, `createSession` reached the configured 10-second
+timeout in both the application path and a forced-online client probe. `auto`
+therefore returned an explicitly offline Session. The immediate prerequisite is
+restoring VPN/gateway reachability; after that, a new same-version Trace is
+still required to diagnose retrieval and source metadata.
+A final application-level repeat returned that explicit offline Session after
+about 11 seconds. The following cycle question was handled locally with
+`intent=cycle_question`, `ragUsed=false` and zero sources; no answer text or
+credential was recorded as test evidence.
 `GET /health/opentrek` only reports local configuration and never exposes
 credentials.
 
@@ -52,7 +63,10 @@ performs at most two bounded automatic replacement attempts on restoration
 events and also exposes a manual "Reconnect OpenTrek" action. A successful
 replacement affects later turns without deleting the conversation. Historical
 offline turns retain their honest label, and an online turn is labelled as RAG
-only when `ragUsed=true` and at least one validated source is present.
+only when `ragUsed=true` and at least one validated source is present. Restored
+conversation metadata is checked again in the browser; only the three retrieval
+intents can expose sources, so an old or malformed message cannot gain a RAG
+badge merely by carrying `ragUsed=true`.
 
 The candidate workflow metadata contract now requires `schemaVersion`,
 `workflowVersion`, `intent`, `strategy`, an explicit boolean `ragUsed` and
@@ -63,15 +77,40 @@ keeps only this allowlist (plus a validated memory candidate and action), and
 the frontend requires online mode, `ragUsed=true` and at least one `sourceId`
 before showing RAG. Neither side infers retrieval from answer wording or
 invents missing sources. The backend accepts a small compatibility alias set
-and unwraps named list containers such as `data`/`results` for provider-shaped
+and unwraps named list containers such as `data`/`results` to a bounded depth for provider-shaped
 retrieval items (`itemId`/`documentId`,
 `fileName`/`documentName`, `fileUrl`, `chunkContent` and common score names),
+continuing to a later named container when an earlier one is empty. Each
+OpenTrek response body is capped at 2 MiB before JSON parsing so a malformed
+gateway response cannot consume unbounded backend memory,
 but only after the renderer has supplied the strict boolean `ragUsed=true` and
-each item has a usable ID and title. An alias is not evidence by itself, and a
-JSON-serialized source list is still rejected unless its items pass the same
+the intent is one of `task_difficulty`, `cycle_question` or `emotion_support`,
+and each item has a usable ID and title. When a response has multiple named
+containers, an empty container or one containing only invalid items does not
+mask a later container with valid source items. An alias is not evidence by itself,
+and a JSON-serialized source list is still rejected unless its items pass the same
 checks. Capture a real Trace and update `normalize-sources.py` with the actual
 field names before relying on this compatibility path. This contract change
 does not modify the published `1785250561438` baseline by itself.
+
+For workflow metadata vocabulary, the backend canonicalizes a small legacy
+alias set before applying the allowlist: `crisis_support` becomes
+`safety_crisis`, `emotional_support` becomes `emotion_support`,
+`open_pomodoro` becomes `open_focus_timer`, and
+`open_environment_reset`/`open_micro_movement` become
+`show_environment_reset`/`show_micro_movement`. The aliases are accepted only
+for compatibility; new workflow nodes and the Schema must emit the canonical
+values.
+
+The source normalizer treats URL, excerpt, chunk and score fields as optional:
+an invalid optional value is dropped while a later valid alias (if present) or
+a source with a valid ID and title is retained. `ragUsed=true` is schema-valid only for the three retrieval
+intents, so tool, memory, small-talk and crisis branches must emit an empty
+source list. The online source evaluator also requires the normalized response
+to carry the explicit boolean `ragUsed=true`; a non-empty source array alone
+cannot pass the Top-3 recall gate. The routing and safety evaluator includes
+`actualRagUsed` beside `actualSources` in each JSON case result so a missing
+RAG declaration is visible during diagnosis, without weakening any pass gate.
 
 The backend and this repository now define a bounded `savedMemoryContext`, but
 the published baseline does not gain that input automatically. It becomes
@@ -115,9 +154,9 @@ source evaluator exits unsuccessfully with `status: "not_ready"` before making
 network calls until every Q01-Q10 label is authoritative; keyword matches are
 not treated as Top-3 recall evidence.
 
-On 2026-08-22, the workflow metadata Schema regression suite passed 3/3 cases,
+On 2026-08-22, the workflow metadata Schema regression suite passed 4/4 cases,
 covering the required boolean, the one-to-three-source RAG branch, and the
-empty-source non-RAG branch. Both offline evaluation-data checks also passed
+retrieval-intent restriction and the empty-source non-RAG branch. Both offline evaluation-data checks also passed
 their structural gate without network calls; the source set remains
 `valid_but_not_ready` because Q01-Q10 still await same-version Trace labels.
 

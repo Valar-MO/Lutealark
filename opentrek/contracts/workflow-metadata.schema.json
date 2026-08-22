@@ -36,6 +36,9 @@
   },
   "then": {
     "properties": {
+      "intent": {
+        "enum": ["task_difficulty", "cycle_question", "emotion_support"]
+      },
       "sources": { "type": "array", "minItems": 1, "maxItems": 3 }
     }
   },

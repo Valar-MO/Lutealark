@@ -74,6 +74,27 @@ describe("OpenTrek workflow metadata schema", () => {
     })).toBe(false);
   });
 
+  it("allows RAG evidence only on retrieval intents", async () => {
+    const validate = await workflowMetadataValidator();
+
+    for (const intent of ["task_difficulty", "cycle_question", "emotion_support"]) {
+      expect(validate({
+        ...baseMetadata,
+        intent,
+        ragUsed: true,
+        sources: [source],
+      })).toBe(true);
+    }
+    for (const intent of ["daily_checkin", "memory_request", "safety_crisis", "smalltalk"]) {
+      expect(validate({
+        ...baseMetadata,
+        intent,
+        ragUsed: true,
+        sources: [source],
+      })).toBe(false);
+    }
+  });
+
   it("requires an empty source list when RAG is not used", async () => {
     const validate = await workflowMetadataValidator();
 

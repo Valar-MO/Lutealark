@@ -41,6 +41,7 @@ function hashKey(hash: Buffer): string {
 class FakeAuthRepository implements AuthRepository {
   readonly accounts = new Map<string, AuthCredential>();
   readonly sessions = new Map<string, StoredSession>();
+  readonly claimedDeviceIds = new Set<string>();
   lastRegistration: RegisterAccountWrite | null = null;
   lastSession: AccountSessionWrite | null = null;
   lastDeletedHash: Buffer | null = null;
@@ -53,6 +54,11 @@ class FakeAuthRepository implements AuthRepository {
   async findAccountByUserId(userId: string): Promise<AuthCredential | null> {
     return [...this.accounts.values()].find((account) => account.userId === userId)
       ?? null;
+  }
+
+  async isAnonymousUserIdAvailable(userId: string): Promise<boolean> {
+    return ![...this.accounts.values()].some((account) => account.userId === userId)
+      && !this.claimedDeviceIds.has(userId);
   }
 
   async registerAccount(input: RegisterAccountWrite): Promise<DataMergeStatus> {
@@ -69,6 +75,7 @@ class FakeAuthRepository implements AuthRepository {
       email: input.email,
       expiresAt: input.session.expiresAt,
     });
+    if (input.deviceUserId) this.claimedDeviceIds.add(input.deviceUserId);
     this.lastRegistration = input;
     return input.deviceUserId ? "merged" : "no_device";
   }
@@ -83,6 +90,7 @@ class FakeAuthRepository implements AuthRepository {
       email: account.email,
       expiresAt: input.session.expiresAt,
     });
+    if (input.deviceUserId) this.claimedDeviceIds.add(input.deviceUserId);
     this.lastSession = input;
     return input.deviceUserId ? "merged" : "no_device";
   }
@@ -228,6 +236,60 @@ describe("AuthService", () => {
       authType: "account",
       userId: registered.user.userId,
       email: EMAIL,
+    });
+  });
+
+  it("does not accept an account UUID or claimed device UUID as anonymous identity", async () => {
+    const repository = new FakeAuthRepository();
+    const service = new AuthService(repository);
+    const registered = await service.register({
+      email: EMAIL,
+      password: PASSWORD,
+      deviceUserId: DEVICE_ID,
+    });
+
+    await expect(resolveAuthenticatedUser(new Request("http://localhost", {
+      headers: { "X-Lutealark-User-Id": registered.user.userId },
+    }), service)).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+    await expect(resolveAuthenticatedUser(new Request("http://localhost", {
+      headers: { "X-Lutealark-User-Id": DEVICE_ID },
+    }), service)).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
+  });
+
+  it("keeps the REST identity boundary closed for claimed IDs while allowing a new device UUID", async () => {
+    const repository = new FakeAuthRepository();
+    const service = new AuthService(repository);
+    const registered = await service.register({
+      email: EMAIL,
+      password: PASSWORD,
+      deviceUserId: DEVICE_ID,
+    });
+    const routes = createAuthRoutes({ service, secureCookies: false });
+    const readMe = async (headers: HeadersInit) =>
+      (await routes.request("/me", { headers })).json();
+
+    await expect(readMe({
+      "X-Lutealark-User-Id": registered.user.userId,
+    })).resolves.toEqual({
+      authenticated: false,
+      authType: "none",
+      user: null,
+    });
+    await expect(readMe({
+      "X-Lutealark-User-Id": DEVICE_ID,
+    })).resolves.toEqual({
+      authenticated: false,
+      authType: "none",
+      user: null,
+    });
+
+    const newDeviceId = "934fb086-2917-465b-933f-bbb5a1b96081";
+    await expect(readMe({
+      "X-Lutealark-User-Id": newDeviceId,
+    })).resolves.toEqual({
+      authenticated: false,
+      authType: "anonymous",
+      user: { userId: newDeviceId },
     });
   });
 
@@ -418,6 +480,41 @@ describe("auth HTTP routes", () => {
 
     const afterLogout = await routes.request("/me", { headers: { Cookie: cookie } });
     await expect(afterLogout.json()).resolves.toEqual({
+      authenticated: false,
+      authType: "none",
+      user: null,
+    });
+  });
+
+  it("does not expose an account through its public UUID header", async () => {
+    const repository = new FakeAuthRepository();
+    const routes = createAuthRoutes({
+      service: new AuthService(repository),
+      secureCookies: false,
+    });
+    const registration = await routes.request("/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Lutealark-User-Id": DEVICE_ID,
+      },
+      body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
+    });
+    const registered = await registration.json() as { user: { userId: string } };
+
+    const accountHeader = await routes.request("/me", {
+      headers: { "X-Lutealark-User-Id": registered.user.userId },
+    });
+    await expect(accountHeader.json()).resolves.toEqual({
+      authenticated: false,
+      authType: "none",
+      user: null,
+    });
+
+    const claimedDeviceHeader = await routes.request("/me", {
+      headers: { "X-Lutealark-User-Id": DEVICE_ID },
+    });
+    await expect(claimedDeviceHeader.json()).resolves.toEqual({
       authenticated: false,
       authType: "none",
       user: null,

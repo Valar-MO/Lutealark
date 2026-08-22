@@ -263,6 +263,36 @@ describe("OpenTrek agent client", () => {
     });
   });
 
+  it("keeps valid source evidence when optional fields or earlier aliases are unusable", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [{
+        sourceId: " ",
+        id: "chunk-1",
+        itemId: "doc-1",
+        documentId: "doc-1",
+        title: "",
+        fileName: "有效资料",
+        url: "not a URL",
+        fileUrl: "https://example.org/valid.pdf",
+        score: 12,
+        rerankScore: 0.74,
+      }],
+    })).toEqual({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [{
+        sourceId: "doc-1",
+        title: "有效资料",
+        url: "https://example.org/valid.pdf",
+        score: 0.74,
+      }],
+    });
+  });
+
   it("accepts a JSON-serialized source list without inferring RAG", async () => {
     const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
     const source = JSON.stringify([{ itemId: "doc-1", fileName: "资料" }]);
@@ -300,6 +330,101 @@ describe("OpenTrek agent client", () => {
     });
   });
 
+  it("continues past an empty source wrapper to a later named result list", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: {
+        data: [],
+        results: [{ itemId: "doc-1", fileName: "有效资料" }],
+      },
+    })).toEqual({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [{ sourceId: "doc-1", title: "有效资料" }],
+    });
+  });
+
+  it("continues past a non-empty wrapper when every item is invalid", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: {
+        data: [{ status: "failed", message: "retrieval pending" }],
+        results: [{ itemId: "doc-1", fileName: "有效资料" }],
+      },
+    })).toEqual({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: [{ sourceId: "doc-1", title: "有效资料" }],
+    });
+  });
+
+  it("bounds nested source containers from an untrusted renderer", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+    let nestedSources: unknown = [{ itemId: "doc-1", fileName: "资料" }];
+    for (let index = 0; index < 10; index += 1) {
+      nestedSources = { data: nestedSources };
+    }
+
+    expect(normalizeAgentMetadata({
+      intent: "cycle_question",
+      ragUsed: true,
+      sources: nestedSources,
+    })).toEqual({
+      intent: "cycle_question",
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
+  it("canonicalizes legacy intent and action aliases at the trust boundary", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "crisis_support",
+      ragUsed: true,
+      sources: [{ sourceId: "crisis-doc", title: "不应显示" }],
+    })).toEqual({
+      intent: "safety_crisis",
+      strategy: "none",
+      ragUsed: false,
+      sources: [],
+    });
+
+    expect(normalizeAgentMetadata({
+      intent: "emotional_support",
+      ragUsed: true,
+      sources: [{ sourceId: "emotion-doc", title: "情绪支持资料" }],
+    })).toEqual({
+      intent: "emotion_support",
+      ragUsed: true,
+      sources: [{ sourceId: "emotion-doc", title: "情绪支持资料" }],
+    });
+
+    for (const [alias, canonical] of [
+      ["open_pomodoro", "open_focus_timer"],
+      ["open_environment_reset", "show_environment_reset"],
+      ["open_micro_movement", "show_micro_movement"],
+    ] as const) {
+      expect(normalizeAgentMetadata({
+        intent: "task_difficulty",
+        action: alias,
+        ragUsed: false,
+        sources: [],
+      })).toEqual({
+        intent: "task_difficulty",
+        action: canonical,
+        ragUsed: false,
+        sources: [],
+      });
+    }
+  });
+
   it.each([
     "http://example.org/file",
     "https://localhost/file",
@@ -313,17 +438,22 @@ describe("OpenTrek agent client", () => {
     const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
 
     expect(normalizeAgentMetadata({
+      intent: "cycle_question",
       ragUsed: true,
       sources: [{ sourceId: "one", title: "资料", url }],
     })).toEqual({
+      intent: "cycle_question",
       ragUsed: true,
       sources: [{ sourceId: "one", title: "资料" }],
     });
   });
 
-  it.each(["safety_crisis", "crisis_support"])(
+  it.each([
+    ["safety_crisis", "safety_crisis"],
+    ["crisis_support", "safety_crisis"],
+  ] as const)(
     "drops all knowledge sources from the %s branch",
-    async (intent) => {
+    async (intent, canonicalIntent) => {
       const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
 
       expect(normalizeAgentMetadata({
@@ -333,9 +463,31 @@ describe("OpenTrek agent client", () => {
           title: "不应在危机回复中显示",
           url: "https://example.org/source",
         }],
-      })).toEqual({ intent, ragUsed: false, sources: [] });
+      })).toEqual({
+        intent: canonicalIntent,
+        strategy: "none",
+        ragUsed: false,
+        sources: [],
+      });
     },
   );
+
+  it("removes normal strategies and actions from a crisis response", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "safety_crisis",
+      strategy: "breathing",
+      action: "open_breathing",
+      ragUsed: true,
+      sources: [{ sourceId: "one", title: "不应显示" }],
+    })).toEqual({
+      intent: "safety_crisis",
+      strategy: "none",
+      ragUsed: false,
+      sources: [],
+    });
+  });
 
   it("does not echo saved-memory context or its policy to the client", async () => {
     const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
@@ -404,6 +556,32 @@ describe("OpenTrek agent client", () => {
       ragUsed: false,
       sources: [],
     });
+  });
+
+  it.each([
+    ["daily_checkin", "daily_checkin"],
+    ["memory_request", "memory_request"],
+    ["smalltalk", "smalltalk"],
+    ["safety_crisis", "safety_crisis"],
+    ["crisis_support", "safety_crisis"],
+    ["unknown_intent", undefined],
+  ] as const)("never accepts RAG evidence for a non-retrieval intent: %s", async (intent, canonicalIntent) => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+    const normalized = normalizeAgentMetadata({
+      intent,
+      strategy: "not-a-strategy",
+      action: "not-an-action",
+      ragUsed: true,
+      sources: [{ itemId: "one", fileName: "不应显示" }],
+    });
+
+    expect(normalized).toMatchObject({
+      ...(canonicalIntent ? { intent: canonicalIntent } : {}),
+      ragUsed: false,
+      sources: [],
+    });
+    expect(normalized).not.toHaveProperty("strategy", "not-a-strategy");
+    expect(normalized).not.toHaveProperty("action", "not-an-action");
   });
 
   it("accepts only a valid non-sensitive memory candidate on its route", async () => {
@@ -549,6 +727,24 @@ describe("OpenTrek agent client", () => {
     expect(error.code).toBeUndefined();
   });
 
+  it("rejects an oversized upstream response without parsing or exposing it", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response("x".repeat(2 * 1024 * 1024 + 1), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { runOpenTrekAgent } = await import("../src/clients/opentrek.js");
+    await expect(runOpenTrekAgent(runInput)).rejects.toMatchObject({
+      name: "OpenTrekError",
+      status: 200,
+      message: expect.stringContaining("response exceeded the 2 MiB limit"),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("retries one HTTP 5xx response", async () => {
     const fetchMock = vi
       .fn()
@@ -646,7 +842,7 @@ describe("OpenTrek agent client", () => {
     expect(normal.sources).toBeUndefined();
 
     const crisis = JSON.parse(buildAgentInputText(
-      "请记住：我不想活了",
+      "手边有药，我怕控制不住",
       { savedMemoryContext: "client spoof" },
       memories,
     ));

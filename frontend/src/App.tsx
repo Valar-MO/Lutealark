@@ -51,6 +51,7 @@ import {
   type DataSubject,
 } from './lib/data-subject'
 import { parseAgentReplyMetadata, sanitizeAgentReplyMetadata } from './lib/chat-metadata'
+import { createAsyncScope, hasCurrentAsyncOperation, isCurrentAsyncScope, type AsyncScope } from './lib/async-scope'
 import {
   DEFAULT_APP_PATH,
   navigateBackToCycle,
@@ -71,6 +72,8 @@ import { useAppStore, type AppView, type ChatMessage, type KnowledgeSource } fro
 
 type PersonalDataSyncStatus = 'syncing' | 'synced' | 'local'
 type ConversationSyncStatus = 'idle' | 'syncing' | 'synced' | 'local'
+type PendingSyncState = { pending: number; failed: boolean }
+type OpenTrekReconnectOperation = { scope: AsyncScope; promise: Promise<boolean> }
 type SpeechRecognitionResultListLike = {
   readonly length: number
   readonly [index: number]: {
@@ -149,17 +152,25 @@ function App() {
   const [personalDataSyncStatus, setPersonalDataSyncStatus] = useState<PersonalDataSyncStatus>('syncing')
   const [conversationSyncStatus, setConversationSyncStatus] = useState<ConversationSyncStatus>('idle')
   const endRef = useRef<HTMLDivElement>(null)
-  const skipNextCycleCalculation = useRef(false)
-  const pendingSyncCount = useRef(0)
-  const syncHadFailure = useRef(false)
+  const skipNextCycleCalculation = useRef<{ subjectKey: string; generation: number } | null>(null)
+  const personalDataSyncs = useRef(new Map<string, PendingSyncState>())
   const personalDataMutationVersion = useRef(0)
   const subjectRefreshSequence = useRef(0)
+  const subjectGeneration = useRef(0)
   const subjectTransitioning = useRef(true)
   const activeSubject = useRef(getActiveDataSubject())
-  const conversationPendingCount = useRef(0)
-  const conversationSyncHadFailure = useRef(false)
-  const automaticOpenTrekReconnects = useRef(0)
-  const openTrekReconnectPromise = useRef<Promise<boolean> | null>(null)
+  const conversationSyncs = useRef(new Map<string, PendingSyncState>())
+  const automaticOpenTrekReconnects = useRef({ subjectKey: '', count: 0 })
+  const openTrekReconnectOperation = useRef<OpenTrekReconnectOperation | null>(null)
+  const agentSessionOperation = useRef<AsyncScope | null>(null)
+  const chatSendOperation = useRef<AsyncScope | null>(null)
+
+  const isCurrentSubjectKey = (subjectKey: string, generation = subjectGeneration.current) => (
+    !subjectTransitioning.current
+    && generation === subjectGeneration.current
+    && useAppStore.getState().dataSubjectKey === subjectKey
+    && dataSubjectKey(getActiveDataSubject()) === subjectKey
+  )
 
   useEffect(() => {
     if (routeView) setViewState(routeView)
@@ -187,58 +198,111 @@ function App() {
   const reconnectOpenTrek = useCallback((automatic = false): Promise<boolean> => {
     if (subjectTransitioning.current) return Promise.resolve(false)
     const reconnectSubjectKey = dataSubjectKey(getActiveDataSubject())
-    if (openTrekReconnectPromise.current) return openTrekReconnectPromise.current
-    if (automatic && automaticOpenTrekReconnects.current >= MAX_AUTOMATIC_OPENTREK_RECONNECTS) {
+    const existingOperation = openTrekReconnectOperation.current
+    if (existingOperation?.scope.subjectKey === reconnectSubjectKey
+      && existingOperation.scope.generation === subjectGeneration.current) {
+      return existingOperation.promise
+    }
+    if (automaticOpenTrekReconnects.current.subjectKey !== reconnectSubjectKey) {
+      automaticOpenTrekReconnects.current = { subjectKey: reconnectSubjectKey, count: 0 }
+    }
+    if (automatic && automaticOpenTrekReconnects.current.count >= MAX_AUTOMATIC_OPENTREK_RECONNECTS) {
       return Promise.resolve(false)
     }
-    if (automatic) automaticOpenTrekReconnects.current += 1
+    if (automatic) automaticOpenTrekReconnects.current.count += 1
+    const scope = createAsyncScope(reconnectSubjectKey, subjectGeneration.current)
     setIsReconnectingOpenTrek(true)
     setOpenTrekReconnectError('')
+    const isCurrentReconnect = () => (
+      !subjectTransitioning.current
+      && isCurrentAsyncScope(
+        openTrekReconnectOperation.current?.scope ?? null,
+        scope,
+        dataSubjectKey(getActiveDataSubject()),
+        subjectGeneration.current,
+      )
+    )
     const operation = reconnectAgentSession()
       .then((replacementSessionCode) => {
-        if (subjectTransitioning.current || dataSubjectKey(getActiveDataSubject()) !== reconnectSubjectKey) return false
+        if (!isCurrentReconnect()) return false
         setSessionCode(replacementSessionCode)
-        automaticOpenTrekReconnects.current = 0
+        automaticOpenTrekReconnects.current = { subjectKey: reconnectSubjectKey, count: 0 }
         return true
       })
       .catch((cause: unknown) => {
-        setOpenTrekReconnectError(getErrorMessage(cause))
+        if (isCurrentReconnect()) setOpenTrekReconnectError(getErrorMessage(cause))
         return false
       })
       .finally(() => {
+        if (openTrekReconnectOperation.current?.scope !== scope) return
+        // The operation still owns the indicator, even if the subject began a
+        // transition between the last callback and finally. Subject-change
+        // handlers clear this ref before starting the replacement operation;
+        // therefore this cannot turn off a newer subject's reconnect state.
         setIsReconnectingOpenTrek(false)
-        openTrekReconnectPromise.current = null
+        openTrekReconnectOperation.current = null
       })
-    openTrekReconnectPromise.current = operation
+    openTrekReconnectOperation.current = { scope, promise: operation }
     return operation
   }, [setSessionCode])
 
   useEffect(() => {
     if (!subjectReady) return
     let active = true
+    const sessionSubjectKey = dataSubjectKey(getActiveDataSubject())
+    const scope = createAsyncScope(sessionSubjectKey, subjectGeneration.current)
+    agentSessionOperation.current = scope
+    const isCurrentSessionOperation = () => (
+      active
+      && !subjectTransitioning.current
+      && isCurrentAsyncScope(
+        agentSessionOperation.current,
+        scope,
+        dataSubjectKey(getActiveDataSubject()),
+        subjectGeneration.current,
+      )
+    )
     const cachedSession = useAppStore.getState().sessionCode
     // Preserve the conversation and its honest offline labels while trying a
     // bounded replacement session. Clearing all messages here made recovery
     // look like data loss and still offered no retry if the first probe failed.
     if (cachedSession && !cachedSession.startsWith('offline:')) {
       setIsConnecting(false)
-      return () => { active = false }
+      if (agentSessionOperation.current === scope) agentSessionOperation.current = null
+      return () => {
+        active = false
+        if (agentSessionOperation.current === scope) agentSessionOperation.current = null
+      }
     }
     if (cachedSession?.startsWith('offline:')) {
       setIsConnecting(false)
+      if (agentSessionOperation.current === scope) agentSessionOperation.current = null
       void reconnectOpenTrek(true)
-      return () => { active = false }
+      return () => {
+        active = false
+        if (agentSessionOperation.current === scope) agentSessionOperation.current = null
+      }
     }
+    setIsConnecting(true)
     createAgentSession()
       .then((code) => {
-        if (!active) return
+        if (!isCurrentSessionOperation()) return
         setSessionCode(code)
         if (isOfflineSessionCode(code)) void reconnectOpenTrek(true)
       })
-      .catch((cause: unknown) => active && setError(getErrorMessage(cause)))
-      .finally(() => active && setIsConnecting(false))
-    return () => { active = false }
-  }, [reconnectOpenTrek, setSessionCode, subjectReady])
+      .catch((cause: unknown) => {
+        if (isCurrentSessionOperation()) setError(getErrorMessage(cause))
+      })
+      .finally(() => {
+        if (!isCurrentSessionOperation()) return
+        setIsConnecting(false)
+        agentSessionOperation.current = null
+      })
+    return () => {
+      active = false
+      if (agentSessionOperation.current === scope) agentSessionOperation.current = null
+    }
+  }, [personalDataSubjectKey, reconnectOpenTrek, setSessionCode, subjectReady])
 
   useEffect(() => {
     const retryWhenConnectivityReturns = () => {
@@ -323,7 +387,16 @@ function App() {
         ? accountDataSubject(event.detail.userId)
         : deviceDataSubject()
       subjectTransitioning.current = true
+      subjectGeneration.current += 1
       setSubjectReady(false)
+      agentSessionOperation.current = null
+      chatSendOperation.current = null
+      openTrekReconnectOperation.current = null
+      automaticOpenTrekReconnects.current = { subjectKey: dataSubjectKey(nextSubject), count: 0 }
+      setIsConnecting(true)
+      setIsSending(false)
+      setIsReconnectingOpenTrek(false)
+      setOpenTrekReconnectError('')
       subjectRefreshSequence.current += 1
       if (event.detail?.dataMerge === 'merged') {
         const personalCopied = transferPendingPersonalDataCache(previousSubject, nextSubject)
@@ -399,7 +472,16 @@ function App() {
     const refreshCrossTabAuth = () => {
       const sequence = ++storageRefreshSequence
       subjectTransitioning.current = true
+      subjectGeneration.current += 1
       setSubjectReady(false)
+      agentSessionOperation.current = null
+      chatSendOperation.current = null
+      openTrekReconnectOperation.current = null
+      automaticOpenTrekReconnects.current = { subjectKey: '', count: 0 }
+      setIsConnecting(true)
+      setIsSending(false)
+      setIsReconnectingOpenTrek(false)
+      setOpenTrekReconnectError('')
       personalDataMutationVersion.current += 1
       clearAgentSessionCache()
       resetConversation()
@@ -449,25 +531,27 @@ function App() {
   useEffect(() => {
     if (!cycleSettings) return
     let active = true
-    if (skipNextCycleCalculation.current) {
-      skipNextCycleCalculation.current = false
+    const cycleSubjectKey = personalDataSubjectKey
+    const cycleGeneration = subjectGeneration.current
+    const skippedCalculation = skipNextCycleCalculation.current
+    skipNextCycleCalculation.current = null
+    if (skippedCalculation?.subjectKey === cycleSubjectKey
+      && skippedCalculation.generation === cycleGeneration) {
       return
     }
     calculateCycle(cycleSettings)
-      .then((result) => { if (active) setCycleResult(result) })
-      .catch((cause: unknown) => { if (active) setError(getErrorMessage(cause)) })
+      .then((result) => {
+        if (active && isCurrentSubjectKey(cycleSubjectKey, cycleGeneration)) setCycleResult(result)
+      })
+      .catch((cause: unknown) => {
+        if (active && isCurrentSubjectKey(cycleSubjectKey, cycleGeneration)) setError(getErrorMessage(cause))
+      })
     return () => { active = false }
   }, [cycleSettings, personalDataSubjectKey, setCycleResult])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isSending])
-
-  const isCurrentSubjectKey = (subjectKey: string) => (
-    !subjectTransitioning.current
-    && useAppStore.getState().dataSubjectKey === subjectKey
-    && dataSubjectKey(getActiveDataSubject()) === subjectKey
-  )
 
   const currentMutationSubject = (): DataSubject | null => {
     const subject = getActiveDataSubject()
@@ -482,6 +566,15 @@ function App() {
     const subject = currentMutationSubject()
     if (!subject) return
     const conversationSubjectKey = dataSubjectKey(subject)
+    const sendGeneration = subjectGeneration.current
+    // React state updates are asynchronous. The ref closes the small window
+    // where two clicks can otherwise start two sends before `isSending` is
+    // committed, while still allowing a fresh generation after account swap.
+    const existingSend = chatSendOperation.current
+    if (hasCurrentAsyncOperation(existingSend, conversationSubjectKey, sendGeneration)) return
+    if (existingSend) chatSendOperation.current = null
+    const sendScope = createAsyncScope(conversationSubjectKey, sendGeneration)
+    chatSendOperation.current = sendScope
     setIsChatOpen(true)
     const createdAt = new Date().toISOString()
     const conversationId = activeConversationId || crypto.randomUUID()
@@ -497,7 +590,7 @@ function App() {
     } else {
       setActiveConversationId(conversationId)
       conversationReady = Promise.resolve().then(() => {
-        if (!isCurrentSubjectKey(conversationSubjectKey)) {
+        if (!isCurrentSubjectKey(conversationSubjectKey, sendGeneration)) {
           throw new Error('数据主体已变更，已取消旧对话创建。')
         }
         return createConversation({
@@ -515,7 +608,7 @@ function App() {
     if (appendUserMessage) {
       setMessages((current) => [...current, userMessage])
       trackConversationSync(conversationReady.then((id) => {
-        if (!isCurrentSubjectKey(conversationSubjectKey)) throw new Error('数据主体已变更')
+        if (!isCurrentSubjectKey(conversationSubjectKey, sendGeneration)) throw new Error('数据主体已变更')
         return createConversationMessage(id, {
           id: userMessage.id,
           role: 'user',
@@ -534,16 +627,16 @@ function App() {
         dailyCheckin: dailyCheckins.find((checkin) => checkin.date === todayString()),
         dailyCheckins: dailyCheckins.filter((checkin) => checkin.shareWithChat),
         onSessionCode: (code) => {
-          if (isCurrentSubjectKey(conversationSubjectKey)) setSessionCode(code)
+          if (isCurrentSubjectKey(conversationSubjectKey, sendGeneration)) setSessionCode(code)
         },
-        isActive: () => isCurrentSubjectKey(conversationSubjectKey),
+        isActive: () => isCurrentSubjectKey(conversationSubjectKey, sendGeneration),
       })
-      if (!isCurrentSubjectKey(conversationSubjectKey)) return
+      if (!isCurrentSubjectKey(conversationSubjectKey, sendGeneration)) return
       if (isOfflineSessionCode(reply.sessionCode)) {
         setSessionCode(reply.sessionCode)
         void reconnectOpenTrek(true)
       } else {
-        automaticOpenTrekReconnects.current = 0
+        automaticOpenTrekReconnects.current = { subjectKey: conversationSubjectKey, count: 0 }
         setOpenTrekReconnectError('')
       }
       const persistedReplyMetadata = sanitizeAgentReplyMetadata(reply.metadata)
@@ -557,7 +650,7 @@ function App() {
       }
       setMessages((current) => [...current, assistantMessage])
       trackConversationSync(conversationReady.then((id) => {
-        if (!isCurrentSubjectKey(conversationSubjectKey)) throw new Error('数据主体已变更')
+        if (!isCurrentSubjectKey(conversationSubjectKey, sendGeneration)) throw new Error('数据主体已变更')
         return createConversationMessage(id, {
           id: assistantMessage.id,
           role: 'assistant',
@@ -567,11 +660,19 @@ function App() {
         })
       }), conversationSubjectKey)
     } catch (cause) {
-      if (!isCurrentSubjectKey(conversationSubjectKey)) return
+      if (!isCurrentSubjectKey(conversationSubjectKey, sendGeneration)) return
       setError(getErrorMessage(cause))
       setFailedMessage(message)
     } finally {
-      setIsSending(false)
+      if (isCurrentAsyncScope(
+        chatSendOperation.current,
+        sendScope,
+        dataSubjectKey(getActiveDataSubject()),
+        subjectGeneration.current,
+      )) {
+        setIsSending(false)
+        chatSendOperation.current = null
+      }
     }
   }
 
@@ -580,6 +681,11 @@ function App() {
     const subject = currentMutationSubject()
     if (!subject) return
     const conversationSubjectKey = dataSubjectKey(subject)
+    const sessionGeneration = subjectGeneration.current
+    const existingSession = agentSessionOperation.current
+    if (hasCurrentAsyncOperation(existingSession, conversationSubjectKey, sessionGeneration)) return
+    const sessionScope = createAsyncScope(conversationSubjectKey, sessionGeneration)
+    agentSessionOperation.current = sessionScope
     resetConversation()
     setConversationSyncStatus('idle')
     setError('')
@@ -588,11 +694,36 @@ function App() {
     setIsConnecting(true)
     try {
       const code = await createAgentSession(true)
-      if (isCurrentSubjectKey(conversationSubjectKey)) setSessionCode(code)
+      if (isCurrentSubjectKey(conversationSubjectKey, sessionGeneration)
+        && isCurrentAsyncScope(
+          agentSessionOperation.current,
+          sessionScope,
+          conversationSubjectKey,
+          sessionGeneration,
+        )) {
+        setSessionCode(code)
+        if (isOfflineSessionCode(code)) void reconnectOpenTrek(true)
+      }
     } catch (cause) {
-      if (isCurrentSubjectKey(conversationSubjectKey)) setError(getErrorMessage(cause))
+      if (isCurrentSubjectKey(conversationSubjectKey, sessionGeneration)
+        && isCurrentAsyncScope(
+          agentSessionOperation.current,
+          sessionScope,
+          conversationSubjectKey,
+          sessionGeneration,
+        )) setError(getErrorMessage(cause))
     }
-    finally { setIsConnecting(false) }
+    finally {
+      if (isCurrentAsyncScope(
+        agentSessionOperation.current,
+        sessionScope,
+        dataSubjectKey(getActiveDataSubject()),
+        subjectGeneration.current,
+      )) {
+        setIsConnecting(false)
+        agentSessionOperation.current = null
+      }
+    }
   }
 
   const openChat = () => {
@@ -604,13 +735,24 @@ function App() {
     personalDataMutationVersion.current += 1
     const subject = currentMutationSubject()
     if (!subject) return
+    const saveGeneration = subjectGeneration.current
+    const saveSubjectKey = dataSubjectKey(subject)
     persistCycleSettings(settings, subject)
-    skipNextCycleCalculation.current = true
+    skipNextCycleCalculation.current = {
+      subjectKey: saveSubjectKey,
+      generation: saveGeneration,
+    }
     setCycleSettings(settings)
     setError('')
     trackPersonalDataSync(syncCycleSettings(settings, subject), subject)
-    const result = await calculateCycle(settings)
-    if (isCurrentSubjectKey(dataSubjectKey(subject))) setCycleResult(result)
+    try {
+      const result = await calculateCycle(settings)
+      if (isCurrentSubjectKey(saveSubjectKey, saveGeneration)) setCycleResult(result)
+    } catch (cause) {
+      if (!isCurrentSubjectKey(saveSubjectKey, saveGeneration)) return
+      setError(getErrorMessage(cause))
+      throw cause instanceof Error ? cause : new Error(getErrorMessage(cause))
+    }
   }
 
   const saveDailyCheckin = (checkin: DailyCheckIn) => {
@@ -662,6 +804,8 @@ function App() {
     if (personalDataSyncStatus === 'syncing') return
     const subject = currentMutationSubject()
     if (!subject) return
+    const syncGeneration = subjectGeneration.current
+    const syncSubjectKey = dataSubjectKey(subject)
     setPersonalDataSyncStatus('syncing')
     try {
       const synchronized = await reconcilePersonalData(
@@ -670,43 +814,54 @@ function App() {
         breathingRecords,
         subject,
       )
-      if (!isCurrentSubjectKey(dataSubjectKey(subject))) return
+      if (!isCurrentSubjectKey(syncSubjectKey, syncGeneration)) return
       setCycleSettings(synchronized.cycleSettings)
       setDailyCheckins(synchronized.dailyCheckins)
       setBreathingRecords(synchronized.breathingRecords)
       setPersonalDataSyncStatus(synchronized.syncFailed || hasPendingPersonalData(subject) ? 'local' : 'synced')
     } catch {
-      setPersonalDataSyncStatus('local')
+      if (isCurrentSubjectKey(syncSubjectKey, syncGeneration)) setPersonalDataSyncStatus('local')
     }
   }
 
   const trackPersonalDataSync = (operation: Promise<unknown>, subject: DataSubject = getActiveDataSubject()) => {
-    pendingSyncCount.current += 1
-    setPersonalDataSyncStatus('syncing')
+    const subjectKey = dataSubjectKey(subject)
+    const generation = subjectGeneration.current
+    const trackerKey = `${generation}:${subjectKey}`
+    const state = personalDataSyncs.current.get(trackerKey) ?? { pending: 0, failed: false }
+    state.pending += 1
+    personalDataSyncs.current.set(trackerKey, state)
+    if (isCurrentSubjectKey(subjectKey, generation)) {
+      setPersonalDataSyncStatus('syncing')
+    }
     void operation
-      .catch(() => { syncHadFailure.current = true })
+      .catch(() => { state.failed = true })
       .finally(() => {
-        pendingSyncCount.current -= 1
-        if (pendingSyncCount.current > 0) return
-        if (dataSubjectKey(subject) === dataSubjectKey(getActiveDataSubject())) {
-          setPersonalDataSyncStatus(syncHadFailure.current || hasPendingPersonalData(subject) ? 'local' : 'synced')
+        state.pending -= 1
+        if (state.pending > 0) return
+        personalDataSyncs.current.delete(trackerKey)
+        if (isCurrentSubjectKey(subjectKey, generation)) {
+          setPersonalDataSyncStatus(state.failed || hasPendingPersonalData(subject) ? 'local' : 'synced')
         }
-        syncHadFailure.current = false
       })
   }
 
   const trackConversationSync = (operation: Promise<unknown>, subjectKey = dataSubjectKey(getActiveDataSubject())) => {
-    conversationPendingCount.current += 1
-    setConversationSyncStatus('syncing')
+    const generation = subjectGeneration.current
+    const trackerKey = `${generation}:${subjectKey}`
+    const state = conversationSyncs.current.get(trackerKey) ?? { pending: 0, failed: false }
+    state.pending += 1
+    conversationSyncs.current.set(trackerKey, state)
+    if (isCurrentSubjectKey(subjectKey, generation)) setConversationSyncStatus('syncing')
     void operation
-      .catch(() => { conversationSyncHadFailure.current = true })
+      .catch(() => { state.failed = true })
       .finally(() => {
-        conversationPendingCount.current -= 1
-        if (conversationPendingCount.current > 0) return
-        if (isCurrentSubjectKey(subjectKey)) {
-          setConversationSyncStatus(conversationSyncHadFailure.current ? 'local' : 'synced')
+        state.pending -= 1
+        if (state.pending > 0) return
+        conversationSyncs.current.delete(trackerKey)
+        if (isCurrentSubjectKey(subjectKey, generation)) {
+          setConversationSyncStatus(state.failed ? 'local' : 'synced')
         }
-        conversationSyncHadFailure.current = false
       })
   }
 
@@ -715,12 +870,13 @@ function App() {
     const subject = currentMutationSubject()
     if (!subject) return
     const conversationSubjectKey = dataSubjectKey(subject)
+    const syncGeneration = subjectGeneration.current
     const firstUserMessage = messages.find((message) => message.role === 'user')
     const operation = createConversation({
       id: activeConversationId,
       title: firstUserMessage?.content.slice(0, 60) || '未命名对话',
     }).then(() => {
-      if (!isCurrentSubjectKey(conversationSubjectKey)) throw new Error('数据主体已变更')
+      if (!isCurrentSubjectKey(conversationSubjectKey, syncGeneration)) throw new Error('数据主体已变更')
       return Promise.all(messages.map((message) => createConversationMessage(activeConversationId, {
         id: message.id,
         role: message.role,
@@ -749,6 +905,7 @@ function App() {
     const subject = currentMutationSubject()
     if (!subject) return
     const conversationSubjectKey = dataSubjectKey(subject)
+    const memoryGeneration = subjectGeneration.current
     if (decision === 'save') {
       await createMemory({
         id: candidate.candidateId,
@@ -759,12 +916,13 @@ function App() {
         consent: true,
       })
     }
+    if (!isCurrentSubjectKey(conversationSubjectKey, memoryGeneration)) return
     const status = decision === 'save' ? 'saved' as const : 'dismissed' as const
     setMessages((current) => current.map((message) => (
       message.id === messageId ? { ...message, memoryCandidateStatus: status } : message
     )))
     if (activeConversationId) {
-      if (!isCurrentSubjectKey(conversationSubjectKey)) return
+      if (!isCurrentSubjectKey(conversationSubjectKey, memoryGeneration)) return
       const sourceMessage = useAppStore.getState().messages.find((message) => message.id === messageId)
       trackConversationSync(updateConversationMessage(activeConversationId, messageId, {
         metadata: {

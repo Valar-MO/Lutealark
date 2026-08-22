@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { env } from "../src/config/env.js";
 import { withDatabaseClient } from "../src/db/pool.js";
@@ -15,15 +15,56 @@ import { hashAgentSessionCode } from "../src/services/agent-session-bindings.js"
 const runDatabaseTests = process.env.RUN_AUTH_DB_TESTS === "true"
   && Boolean(env.DATABASE_URL);
 
-function session(byte: number) {
+function session() {
   return {
     id: randomUUID(),
-    tokenHash: Buffer.alloc(32, byte),
+    // Each database test may run against a reused local database. Generate a
+    // unique hash so stale sessions cannot collide with the unique index.
+    tokenHash: randomBytes(32),
     expiresAt: new Date("2035-01-01T00:00:00.000Z"),
   };
 }
 
 describe.runIf(runDatabaseTests)("PostgreSQL account claim", () => {
+  it("does not expose registered or claimed UUIDs as anonymous identities", async () => {
+    const accountUserId = randomUUID();
+    const deviceUserId = randomUUID();
+    const unclaimedUserId = randomUUID();
+    try {
+      await postgresAuthRepository.registerAccount({
+        userId: accountUserId,
+        email: `auth-db-anonymous-${accountUserId}@example.com`,
+        passwordHash: Buffer.alloc(64, 7),
+        passwordSalt: Buffer.alloc(16, 7),
+        session: session(),
+      });
+      await withDatabaseClient(async (client) => {
+        await client.query("INSERT INTO app_users (id) VALUES ($1)", [deviceUserId]);
+      });
+      await withDatabaseClient(async (client) => {
+        await client.query(
+          "INSERT INTO auth_device_claims (device_user_id, account_user_id) VALUES ($1, $2)",
+          [deviceUserId, accountUserId],
+        );
+      });
+
+      await expect(postgresAuthRepository.isAnonymousUserIdAvailable(accountUserId))
+        .resolves.toBe(false);
+      await expect(postgresAuthRepository.isAnonymousUserIdAvailable(deviceUserId))
+        .resolves.toBe(false);
+      await expect(postgresAuthRepository.isAnonymousUserIdAvailable(unclaimedUserId))
+        .resolves.toBe(true);
+    } finally {
+      await withDatabaseClient(async (client) => {
+        await client.query("DELETE FROM app_users WHERE id = ANY($1::uuid[])", [
+          accountUserId,
+          deviceUserId,
+          unclaimedUserId,
+        ]);
+      }).catch(() => undefined);
+    }
+  });
+
   it("atomically merges legacy and product data with deterministic conflicts", async () => {
     const accountUserId = randomUUID();
     const secondAccountUserId = randomUUID();
@@ -49,14 +90,14 @@ describe.runIf(runDatabaseTests)("PostgreSQL account claim", () => {
         email: `auth-db-${accountUserId}@example.com`,
         passwordHash: Buffer.alloc(64, 1),
         passwordSalt: Buffer.alloc(16, 1),
-        session: session(1),
+        session: session(),
       });
       await postgresAuthRepository.registerAccount({
         userId: secondAccountUserId,
         email: `auth-db-${secondAccountUserId}@example.com`,
         passwordHash: Buffer.alloc(64, 2),
         passwordSalt: Buffer.alloc(16, 2),
-        session: session(2),
+        session: session(),
       });
 
       await withDatabaseClient(async (client) => {
@@ -185,7 +226,7 @@ describe.runIf(runDatabaseTests)("PostgreSQL account claim", () => {
       const status = await postgresAuthRepository.createAccountSession({
         userId: accountUserId,
         deviceUserId,
-        session: session(3),
+        session: session(),
       });
       expect(status).toBe("merged");
 
@@ -275,17 +316,17 @@ describe.runIf(runDatabaseTests)("PostgreSQL account claim", () => {
       await expect(postgresAuthRepository.createAccountSession({
         userId: accountUserId,
         deviceUserId,
-        session: session(4),
+        session: session(),
       })).resolves.toBe("merged");
       await expect(postgresAuthRepository.createAccountSession({
         userId: secondAccountUserId,
         deviceUserId,
-        session: session(5),
+        session: session(),
       })).resolves.toBe("already_claimed");
       await expect(postgresAuthRepository.createAccountSession({
         userId: secondAccountUserId,
         deviceUserId: accountUserId,
-        session: session(6),
+        session: session(),
       })).resolves.toBe("registered_account");
 
       const portableData = await postgresAuthRepository.getAccountData(accountUserId);

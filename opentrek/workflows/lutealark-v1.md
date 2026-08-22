@@ -34,6 +34,10 @@ Start
 Rules:
 
 - The crisis branch never reaches retrieval, points, memory or cycle advice.
+- The crisis renderer must use the schema-required neutral `strategy: "none"`
+  and must not emit an ordinary action; the backend forces this neutral
+  strategy and removes action/memory metadata at its trust boundary before
+  returning the safety response.
 - Enable “recall file address” on retrieval, but capture the actual Trace JSON
   before configuring `normalize-sources.py`.
 - Every renderer returns an explicit `ragUsed` boolean. RAG renderers return

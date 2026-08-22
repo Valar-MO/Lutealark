@@ -10,6 +10,8 @@
 
 > Lutealark 是日常自我支持工具，不提供医疗诊断或治疗，也不能替代专业医疗服务或紧急援助。
 
+本仓库只维护个人电脑浏览器版本；OpenTrek 章节中的“部署”仅指复制、配置和发布专有云平台上的候选 Agent 版本。
+
 ## 1. 产品定位与设计原则
 
 Lutealark 面向希望同时照顾 ADHD 特征、周期变化和当下能量的女性用户。产品不要求用户先完成复杂设置，也不会把一次情绪披露自动转成任务、积分或长期档案。
@@ -325,6 +327,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 
 - 首次使用生成稳定设备 UUID，作为本机数据分区键。
 - 匿名 UUID 只是本机数据分区键，不是认证凭据。
+- 服务端会在接受匿名 UUID 前检查它尚未对应注册账号、也未被其他账号认领；已注册账号 UUID 或已认领设备 UUID 即使被伪造到请求头，也不会作为匿名身份访问数据。有效登录 Cookie 始终优先。
 - 未登录时可使用本地功能，并在数据库可用时按匿名主体同步。
 - 真正跨设备同步需要注册并登录账号。
 
@@ -378,7 +381,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 
 账号切换和跨标签页同步还会清空旧主体的 Agent Session、当前对话和输入框。正在进行的
 个人数据、对话、档案、积分和工具请求会在发送前后检查主体；如果主体已经变化，旧响应和旧
-写入会被丢弃，不会覆盖新账号页面。页面重新获得焦点、`pageshow` 和上海业务日期跨午夜时
+写入会被丢弃，不会覆盖新账号页面。会话建立、重连、发送和同步操作还会追踪登录世代；旧请求的 `finally` 不会清除新主体的 loading 或同步状态。聊天发送使用同步操作锁，连续点击不会在 React 状态提交前重复发送。页面重新获得焦点、`pageshow` 和上海业务日期跨午夜时
 也会重新确认主体和当天数据。
 
 ### 10.2 正常写入
@@ -420,6 +423,11 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 `OPENTREK_AGENT_CODE`，并保持 Agent version `1785250561438`。密钥只放在本机 `.env`，
 不能进入 GitHub。每位使用者都必须在自己的电脑上重复安装 PostgreSQL、运行后端和前端；
 `localhost` 不是可共享地址。
+离线本地运行不需要 VPN；VPN 只在进行在线 OpenTrek 测试时需要。
+
+项目根目录的 `.nvmrc` 固定 Node.js `24.16.0`。macOS 用户可用 nvm 切换该版本；没有
+nvm 时，从 Node.js 官方下载页安装对应版本后重新打开终端。Windows 用户也应安装
+`24.16.0`，再执行依赖安装和迁移命令。
 
 仓库不保存专网网关默认值。`offline` 模式允许 OpenTrek 配置留空；`auto` 和 `online` 必须
 在本机 `.env` 中显式提供网关地址、APP_KEY、Agent code 和 Agent version，缺少任一项时
@@ -430,7 +438,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 
 OpenTrek 客户端在总超时预算内最多尝试两次；默认创建 Session 超时 10 秒、运行超时 60 秒、重试间隔 250 毫秒。业务错误、4xx 和显式 `online` 模式不会被包装成离线成功。
 
-`GET /health/opentrek` 是不含密钥的本地配置检查，只返回 `mode`、`configured`、`agentVersion` 和配置状态；`ready` 不代表网关或 RAG 已经通过运行检查。2026-08-19 当前版本曾成功完成在线 Session 与普通/周期问答，之后平台又出现 Session 数据库只读事务和 `run` 无消息。2026-08-20 的六次全新探测曾返回 `mode=offline`。2026-08-22 最新实测创建了在线 Session，并发送周期问题“黄体晚期为什么更容易注意力飘和疲惫？请结合可靠资料解释个体差异，并给出可核验的来源”，路由为 `cycle_question`、回复非空，但 metadata 未包含 `ragUsed=true`，来源为空，因此前端保持“OpenTrek 在线 · 未确认使用 RAG”。这证明在线问答可达，但不证明当前发布基线已经完成知识库检索或来源回传。
+`GET /health/opentrek` 是不含密钥的本地配置检查，只返回 `mode`、`configured`、`agentVersion` 和配置状态；`ready` 不代表网关或 RAG 已经通过运行检查。2026-08-19 当前版本曾成功完成在线 Session 与普通/周期问答，之后平台又出现 Session 数据库只读事务和 `run` 无消息。2026-08-20 的六次全新探测曾返回 `mode=offline`。2026-08-22 早先一次实测创建了在线 Session，并发送周期问题，路由为 `cycle_question`、回复非空，但 metadata 未包含 `ragUsed=true`，来源为空，因此前端保持“OpenTrek 在线 · 未确认使用 RAG”；本轮最新探测在创建 Session 时于 10 秒超时，`auto` 模式诚实降级为离线。这证明当前链路不稳定，也不证明当前发布基线已经完成知识库检索或来源回传。
 
 ### 11.2 OpenTrek 规格包
 
@@ -462,9 +470,12 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 
 - 来源必须来自同一次真实检索结果。
 - `ragUsed=true` 与 1–3 条有效来源必须同时出现；非 RAG 回复必须明确返回 `ragUsed=false` 和空来源。
+- 在线评估逐案例结果会输出 `actualRagUsed`，与 `actualSources` 一起用于排查 RAG 标记和来源证据是否一致；评估通过仍要求意图、来源和安全条件全部满足。
 - 后端校验、去重、截断并清理来源字段。
 - 前端再次校验、去重并限制为 3 条。
-- 后端兼容一组受限的 OpenTrek 检索字段别名和 `data`/`results` 等已命名列表包装（例如 `itemId`/`documentId`、`fileName`/`documentName`、`fileUrl`、`chunkContent` 和常见分数字段），先归一化为产品来源合同再校验；必须仍有明确的布尔 `ragUsed=true`、来源 ID 和标题，别名不会推断 RAG。平台 Trace 仍需用于确认真实字段和同次运行的来源归属。
+- 后端兼容一组受限的 OpenTrek 检索字段别名和 `data`/`results` 等有界深度的已命名列表包装；如果前一个包装为空，或其中没有任何同时具备有效 ID 和标题的条目，会继续检查后续包装（例如 `itemId`/`documentId`、`fileName`/`documentName`、`fileUrl`、`chunkContent` 和常见分数字段），先归一化为产品来源合同再校验；意图别名 `crisis_support`、`emotional_support` 会归一为 `safety_crisis`、`emotion_support`，动作别名 `open_pomodoro`、`open_environment_reset`、`open_micro_movement` 会归一为 `open_focus_timer`、`show_environment_reset`、`show_micro_movement`。可选字段不合规时只丢弃该字段，不会连带丢弃已有合法 ID/标题的来源。OpenTrek 单次响应体限制为 2 MiB，避免异常网关响应占用无界内存。必须仍有明确的布尔 `ragUsed=true`、来源 ID 和标题，别名不会推断 RAG。平台 Trace 仍需用于确认真实字段和同次运行的来源归属。
+- RAG 证据仅允许对应 `task_difficulty`、`cycle_question`、`emotion_support` 检索意图；`daily_checkin`、`memory_request`、`smalltalk` 和危机分支会清空误传来源。危机分支强制保留 Schema 要求的中性 `strategy: "none"`，同时清除普通动作和记忆候选，避免误出现周期、工具或任务入口。上游意图、策略和动作不在工作流枚举中的值也会被丢弃。
+- 恢复已保存对话时会在前端再次执行同一意图白名单；历史 metadata 不能仅凭 `ragUsed=true` 和来源字段绕过三类检索意图条件。
 - 可点击链接必须是安全的 HTTPS 地址，不接受账号密码、私网主机或带 token/signature 等敏感查询的 URL。
 - 离线、非 RAG 与危机分支必须返回空来源。
 - 平台回显的记忆上下文、内部策略字段和不可信 metadata 不会持久化或展示。
@@ -525,6 +536,7 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - 密码使用每账号独立随机 salt 的 Node `scrypt` 派生，比较使用 timing-safe 操作。
 - 登录 token 使用密码学安全随机数，数据库只保存 SHA-256 哈希。
 - Cookie 为 `HttpOnly; SameSite=Strict`；HTTPS/生产环境增加 `Secure`，默认 30 天过期。
+- `X-Lutealark-User-Id` 只可代表尚未注册或认领的匿名设备 UUID；已注册账号 UUID 和已认领设备 UUID 即使格式正确也不会被当作匿名身份，账号数据必须通过有效的 HttpOnly 会话 Cookie 访问。
 - Agent Session Code 不落明文数据库，只保存 SHA-256，并按主体与在线/离线模式绑定 24 小时。
 - 未绑定、过期、模式不符或跨主体复用统一要求重建，不向调用方泄露具体归属。
 - 在线 Session 绑定数据库故障时 fail closed；离线基础回复可在无记忆的前提下降级。
@@ -534,12 +546,13 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 
 截至 2026-08-22（本轮代码与文档调整后）：
 
-- 后端 Vitest：20 个测试文件、233 个测试通过、3 个数据库测试按环境跳过（共 236 个测试）；前端 Vitest：14 个测试文件、66 个测试通过。
+- 后端 Vitest 普通模式：19 个文件通过、1 个文件按环境跳过，260 个测试通过、4 个测试跳过（4 个均来自数据库测试文件；共 264 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，20 个文件、264 个测试全部通过。前端 Vitest：15 个测试文件、77 个测试全部通过。
 - 后端 `npm run check`、`npm run build`，前端 `npm run lint`、`npm run build` 均通过；前后端 `npm audit` 均报告 0 个已知漏洞。
 - 全新临时 PostgreSQL 数据库的 001–005 迁移全部成功；已有数据库若校验和不一致会被保护性停止，不自动修复。
+- 本机离线 HTTP 冒烟测试实际通过健康检查、数据库、周期计算、Session 创建和任务问答；任务回复明确为 `ragUsed=false`、`sources=[]`。
 - 离线 Session 创建、普通问答、危机优先、动作确认、记忆闭环、跨账号 Session 拒绝、账号导出与删号已完成自动化或真实 HTTP/数据库验证。
 - OpenTrek 路由/安全离线校验：12 条路由、2 条危机、5 条安全样例，状态 `valid`；来源校验状态 `valid_but_not_ready`，Q01–Q10 均等待真实 Trace/sourceId。
-- OpenTrek 2026-08-22 最新实测成功创建在线 Session 并命中 `cycle_question`，但 `ragUsed` 未返回且来源为空；当前不能确认远端知识库或 RAG 来源可用。
+- OpenTrek 2026-08-22 早先实测曾成功创建在线 Session 并命中 `cycle_question`，但 `ragUsed` 未返回且来源为空；本轮最新应用探测约 11 秒后得到明确的离线 Session，后续周期问题返回 `intent=cycle_question`、`ragUsed=false` 和 0 条来源。`/health/opentrek` 的 `ready` 只表示本机四项配置齐全，不表示 VPN/网关已应答。当前仍不能确认远端知识库或 RAG 来源可用。
 - `ragUsed`/`sources` JSON Schema 回归测试和两项离线 OpenTrek 数据校验均通过；来源集合仍是 `valid_but_not_ready`，这些命令未联网。
 - 内置浏览器插件最终返回空实例列表，因此本次没有完成真实点击、桌面/移动截图或视觉重叠验收。
 
