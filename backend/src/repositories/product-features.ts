@@ -223,6 +223,22 @@ async function inUserTransaction<T>(
   });
 }
 
+async function inRepeatableRead<T>(
+  operation: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withDatabaseClient(async (client) => {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    try {
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  });
+}
+
 const conversationSelect = `
   SELECT c.id,
          c.title,
@@ -500,7 +516,7 @@ export const postgresProductFeaturesRepository: ProductFeaturesRepository = {
   },
 
   async getDailyPlan(userId, date) {
-    return withDatabaseClient((client) => selectPlan(client, userId, date));
+    return inRepeatableRead((client) => selectPlan(client, userId, date));
   },
 
   async upsertDailyPlan(userId, input) {
@@ -656,7 +672,7 @@ export const postgresProductFeaturesRepository: ProductFeaturesRepository = {
   },
 
   async getPointsSummary(userId, referenceDate) {
-    return withDatabaseClient(async (client) => {
+    return inRepeatableRead(async (client) => {
       const date = referenceDate ?? new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Shanghai",
         year: "numeric",

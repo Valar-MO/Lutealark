@@ -192,8 +192,6 @@ export type AuthSessionResponse = {
   user: AccountUser
   expiresAt: ISODateTime
   dataMerge: DataMergeStatus
-  /** Present only for an explicitly identified Capacitor client. */
-  accessToken?: string
 }
 
 export type DeleteAccountInput = {

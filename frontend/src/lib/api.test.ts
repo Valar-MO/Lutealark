@@ -179,6 +179,32 @@ describe('Agent session recreation', () => {
     })).rejects.toMatchObject({ code: 'AGENT_CHAT_FAILED' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('cancels stale-session recreation when the conversation subject changes', async () => {
+    const storage = memoryStorage({ 'lutealark.device-id.v1': DEVICE_ID })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    })
+    let active = true
+    const fetchMock = vi.fn(async () => {
+      active = false
+      return jsonResponse({
+        error: 'AGENT_SESSION_RECREATE_REQUIRED',
+        message: '会话需要重建',
+      }, 409)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(sendAgentMessageWithSessionRetry({
+      sessionCode: 'old-subject-session',
+      message: '不应重试到新账号',
+      onSessionCode: () => undefined,
+      isActive: () => active,
+    })).rejects.toThrow('数据主体已变更')
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
 })
 
 describe('OpenTrek reconnection', () => {
@@ -218,6 +244,31 @@ describe('OpenTrek reconnection', () => {
     })))
 
     await expect(reconnectAgentSession()).resolves.toBe('online-session')
+  })
+
+  it('does not let a superseded request failure clear the active session request', async () => {
+    const storage = memoryStorage({ 'lutealark.device-id.v1': DEVICE_ID })
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    })
+    let rejectOld: ((cause: Error) => void) | undefined
+    let resolveCurrent: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => { rejectOld = reject }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveCurrent = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const oldRequest = createAgentSession(true)
+    const currentRequest = createAgentSession(true)
+    rejectOld?.(new Error('old request failed'))
+    await expect(oldRequest).rejects.toThrow('无法连接服务')
+
+    expect(createAgentSession()).toBe(currentRequest)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    resolveCurrent?.(jsonResponse({ sessionCode: 'current-session' }))
+    await expect(currentRequest).resolves.toBe('current-session')
   })
 })
 

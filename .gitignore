@@ -13,23 +13,8 @@ coverage/
 __pycache__/
 *.py[cod]
 
-# Generated Android/Gradle artifacts
-.gradle/
-build/
-*.apk
-*.aab
-*.aar
-*.dex
-*.class
-
-# Local source/reference material; distributable app assets live under frontend/public.
+# Local source/reference material; web static assets live under frontend/public.
 /*.docx
 /*.pdf
 /*.png
 /*.jpg
-
-*.jks
-*.keystore
-*.p12
-key.properties
-google-services.json

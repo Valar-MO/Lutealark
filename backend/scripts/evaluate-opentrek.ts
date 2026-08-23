@@ -46,6 +46,7 @@ interface CaseResult {
   actualStrategy: string | null;
   actualAction: string | null;
   actualSources: string[];
+  actualRagUsed: boolean;
   intentMatches: boolean;
   strategyMatches: boolean;
   actionMatches: boolean;
@@ -172,6 +173,7 @@ function baseResult(
     actualStrategy: comparison.actualStrategy,
     actualAction: comparison.actualAction,
     actualSources: comparison.actualSources,
+    actualRagUsed: comparison.actualRagUsed,
     intentMatches: comparison.intentMatches,
     strategyMatches: comparison.strategyMatches,
     actionMatches: comparison.actionMatches,

@@ -234,7 +234,7 @@ export const postgresPersonalDataRepository: PersonalDataRepository = {
 
   async deleteDailyCheckin(userId, date) {
     dateOnlyTimestamp(date);
-    return withDatabaseClient(async (client) => {
+    return inUserTransaction(userId, async (client) => {
       const result = await client.query(
         "DELETE FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2::date",
         [userId, date],
@@ -245,7 +245,7 @@ export const postgresPersonalDataRepository: PersonalDataRepository = {
   },
 
   async deleteBreathingRecord(userId, recordId) {
-    return withDatabaseClient(async (client) => {
+    return inUserTransaction(userId, async (client) => {
       const result = await client.query(
         "DELETE FROM breathing_records WHERE user_id = $1 AND id = $2",
         [userId, recordId],

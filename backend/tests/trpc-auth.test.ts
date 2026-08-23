@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createApp } from "../src/app.js";
+import type { AuthRepository } from "../src/repositories/auth.js";
+import { AuthService } from "../src/services/auth.js";
 import type { MemoryRepository } from "../src/repositories/memory.js";
 import type { PersonalDataRepository } from "../src/repositories/personal-data.js";
 import type { ProductFeaturesRepository } from "../src/repositories/product-features.js";
@@ -38,6 +41,63 @@ function dependencies() {
 }
 
 describe("tRPC identity binding", () => {
+  it("rejects registered or claimed UUID headers and accepts an unclaimed UUID", async () => {
+    const getPointsSummary = vi.fn(async () => ({
+      weekStart: "2026-08-10",
+      weekEnd: "2026-08-16",
+      weeklyGoal: 30,
+      weeklyPoints: 0,
+      totalPoints: 0,
+      remainingPoints: 30,
+      breakdown: {
+        checkin: 0,
+        breathing: 0,
+        pomodoro: 0,
+        plan_item: 0,
+        environment: 0,
+        micro_movement: 0,
+      },
+      recentEvents: [],
+    }));
+    const registeredId = ACCOUNT_USER_ID;
+    const claimedId = SPOOFED_USER_ID;
+    const unclaimedId = "934fb086-2917-465b-933f-bbb5a1b96081";
+    const authRepository = {
+      findAccountByEmail: async () => null,
+      findAccountByUserId: async () => null,
+      isAnonymousUserIdAvailable: async (userId: string) => (
+        userId !== registeredId && userId !== claimedId
+      ),
+      registerAccount: async () => "no_device" as const,
+      createAccountSession: async () => "no_device" as const,
+      findActiveSession: async () => null,
+      deleteSession: async () => undefined,
+      getAccountData: async () => null,
+      deleteAccount: async () => false,
+    } satisfies AuthRepository;
+    const app = createApp({
+      personalDataRepository: {} as PersonalDataRepository,
+      productFeaturesRepository: { getPointsSummary } as unknown as ProductFeaturesRepository,
+      authenticationService: new AuthService(authRepository),
+    });
+    const request = (userId: string) => app.request(
+      `/trpc/points.summary?input=${encodeURIComponent(JSON.stringify({ userId }))}`,
+      {
+      headers: {
+        "X-Lutealark-User-Id": userId,
+      },
+      },
+    );
+
+    for (const blockedId of [registeredId, claimedId]) {
+      const response = await request(blockedId);
+      expect(response.status).toBe(401);
+    }
+    const accepted = await request(unclaimedId);
+    expect(accepted.status).toBe(200);
+    expect(getPointsSummary).toHaveBeenCalledWith(unclaimedId, undefined);
+  });
+
   it("uses the authenticated request identity instead of a payload UUID", async () => {
     const { router, getPointsSummary } = dependencies();
     const caller = router.createCaller({

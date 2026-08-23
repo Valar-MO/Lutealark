@@ -16,8 +16,6 @@ import {
   AuthService,
   AuthServiceError,
   authService,
-  isCapacitorClient,
-  readBearerToken,
   readCookieValue,
   type AuthResult,
 } from "../services/auth.js";
@@ -43,7 +41,7 @@ export const DEFAULT_AUTH_RATE_LIMITS: AuthRateLimits = Object.freeze({
   registerByClient: { limit: 30, windowMs: 60 * 60 * 1_000 },
 });
 
-type RateBucket = { attempts: number; resetAt: number };
+type RateBucket = { attempts: number; limit: number; resetAt: number };
 
 export class MemoryAuthRateLimiter {
   private readonly buckets = new Map<string, RateBucket>();
@@ -52,8 +50,8 @@ export class MemoryAuthRateLimiter {
     private readonly now: () => number = Date.now,
     private readonly maxEntries = 10_000,
   ) {
-    if (!Number.isSafeInteger(maxEntries) || maxEntries < 100) {
-      throw new Error("maxEntries must be a safe integer of at least 100");
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+      throw new Error("maxEntries must be a positive safe integer");
     }
   }
 
@@ -64,8 +62,10 @@ export class MemoryAuthRateLimiter {
     const now = this.now();
     let bucket = this.buckets.get(key);
     if (!bucket || bucket.resetAt <= now) {
-      this.makeRoom(now, key);
-      bucket = { attempts: 0, resetAt: now + rule.windowMs };
+      if (!this.makeRoom(now, key)) {
+        return { allowed: false, retryAfterSeconds: 1 };
+      }
+      bucket = { attempts: 0, limit: rule.limit, resetAt: now + rule.windowMs };
       this.buckets.set(key, bucket);
     }
     if (bucket.attempts >= rule.limit) {
@@ -78,16 +78,19 @@ export class MemoryAuthRateLimiter {
     return { allowed: true, retryAfterSeconds: 0 };
   }
 
-  private makeRoom(now: number, incomingKey: string): void {
-    if (this.buckets.has(incomingKey) || this.buckets.size < this.maxEntries) return;
+  private makeRoom(now: number, incomingKey: string): boolean {
+    if (this.buckets.has(incomingKey) || this.buckets.size < this.maxEntries) return true;
     for (const [key, bucket] of this.buckets) {
       if (bucket.resetAt <= now) this.buckets.delete(key);
     }
-    while (this.buckets.size >= this.maxEntries) {
-      const oldestKey = this.buckets.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      this.buckets.delete(oldestKey);
+    if (this.buckets.size < this.maxEntries) return true;
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.attempts < bucket.limit) {
+        this.buckets.delete(key);
+        return true;
+      }
     }
+    return false;
   }
 }
 
@@ -112,9 +115,9 @@ export interface CreateAuthRoutesOptions {
 }
 
 function defaultClientKey(request: Request): string {
-  // The bundled reverse proxies overwrite X-Real-IP. Do not trust provider-
-  // specific headers supplied directly by a caller; that would let clients
-  // rotate a forged value and bypass the per-client auth bucket.
+  // The local server has no trusted proxy layer. This is a best-effort
+  // per-client bucket, not a network identity; forwarded headers are not
+  // treated as proof of origin.
   return request.headers.get("X-Real-IP") ?? "unknown-client";
 }
 
@@ -241,14 +244,12 @@ export function createAuthRoutes(options: CreateAuthRoutesOptions = {}): Hono {
       [`register:client:${client}`, limits.registerByClient],
     ]);
     const result = await service.register(input);
-    const nativeClient = isCapacitorClient(c.req.raw);
-    if (!nativeClient) setSessionCookie(c, result, isSecure(c.req.raw));
+    setSessionCookie(c, result, isSecure(c.req.raw));
     return c.json({
       authenticated: true as const,
       user: result.user,
       expiresAt: result.expiresAt.toISOString(),
       dataMerge: result.dataMerge,
-      ...(nativeClient ? { accessToken: result.sessionToken } : {}),
     }, 201);
   });
 
@@ -261,22 +262,17 @@ export function createAuthRoutes(options: CreateAuthRoutesOptions = {}): Hono {
       [`login:client:${client}`, limits.loginByClient],
     ]);
     const result = await service.login(input);
-    const nativeClient = isCapacitorClient(c.req.raw);
-    if (!nativeClient) setSessionCookie(c, result, isSecure(c.req.raw));
+    setSessionCookie(c, result, isSecure(c.req.raw));
     return c.json({
       authenticated: true as const,
       user: result.user,
       expiresAt: result.expiresAt.toISOString(),
       dataMerge: result.dataMerge,
-      ...(nativeClient ? { accessToken: result.sessionToken } : {}),
     });
   });
 
   routes.post("/logout", async (c) => {
-    const bearer = readBearerToken(c.req.raw);
-    const token = bearer.present
-      ? bearer.token
-      : readCookieValue(c.req.raw.headers.get("Cookie"), AUTH_SESSION_COOKIE);
+    const token = readCookieValue(c.req.raw.headers.get("Cookie"), AUTH_SESSION_COOKIE);
     await service.logout(token);
     clearSessionCookie(c, isSecure(c.req.raw));
     return c.json({ authenticated: false as const });

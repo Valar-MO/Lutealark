@@ -503,6 +503,16 @@ describeWithDatabase("PostgreSQL product features", () => {
       userId,
       date: "2026-02-30",
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.checkins.upsert({
+      userId,
+      checkin: {
+        date: "2026-02-30",
+        energy: 3,
+        mood: "calm",
+        bodyState: [],
+        shareWithChat: true,
+      },
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await caller.checkins.upsert({
       userId,
       checkin: {

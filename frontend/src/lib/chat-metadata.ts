@@ -12,6 +12,11 @@ const PRIVATE_AGENT_METADATA_KEYS = new Set([
   'savedmemoryusagepolicy',
   'longtermmemorycontext',
 ])
+const RAG_INTENTS = new Set([
+  'task_difficulty',
+  'cycle_question',
+  'emotion_support',
+])
 
 export type ParsedChatMetadata = {
   intent?: string
@@ -58,18 +63,26 @@ function parseChatMetadataValue(
   const intent = stringValue(metadata.intent)
   const crisisIntent = intent === 'safety_crisis' || intent === 'crisis_support'
   const mode = metadata.mode === 'offline' ? 'offline' : metadata.mode === 'online' ? 'online' : undefined
+  const parsedSources = crisisIntent ? [] : parseKnowledgeSources(metadata.sources)
+  const hasAuthoritativeSource = parsedSources.some((source) => Boolean(source.sourceId))
+  const hasVerifiedRag = mode === 'online'
+    && RAG_INTENTS.has(intent ?? '')
+    && metadata.ragUsed === true
+    && hasAuthoritativeSource
   return {
     intent,
     action: stringValue(metadata.action),
     mode,
     ragUsed: crisisIntent || mode === 'offline'
       ? false
-      : metadata.ragUsed === true
+      : hasVerifiedRag
         ? true
         : metadata.ragUsed === false
           ? false
           : undefined,
-    sources: crisisIntent ? [] : parseKnowledgeSources(metadata.sources),
+    // Sources without an explicit RAG assertion are not evidence and must not
+    // be rendered as though they came from a verified retrieval run.
+    sources: hasVerifiedRag ? parsedSources : [],
     memoryCandidate: intent === 'memory_request'
       ? parseMemoryCandidate(metadata.memoryCandidate ?? metadata.memory_candidate)
       : undefined,
@@ -120,7 +133,9 @@ function normalizeSource(value: unknown): KnowledgeSource | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
 
   const source = value as Record<string, unknown>
-  const title = firstString(source.title, source.name, source.fileName, source.documentName, source.sourceId)
+  const sourceId = firstString(source.sourceId, source.id)?.slice(0, 200)
+  if (!sourceId) return null
+  const title = firstString(source.title, source.name, source.fileName, source.documentName, sourceId)
     ?.slice(0, 200)
   if (!title) return null
 
@@ -132,7 +147,7 @@ function normalizeSource(value: unknown): KnowledgeSource | null {
 
   return {
     title,
-    sourceId: firstString(source.sourceId, source.id)?.slice(0, 200),
+    sourceId,
     chunkId: firstString(source.chunkId)?.slice(0, 200),
     excerpt: firstString(source.excerpt, source.snippet, source.chunkContent)?.slice(0, 500),
     url,
@@ -170,7 +185,7 @@ function isSafeHttpUrl(value: string) {
 
 function isPrivateHostname(hostname: string) {
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) return true
-  if (hostname === '::' || hostname === '::1' || hostname.startsWith('::ffff:') || hostname.startsWith('fe8') || hostname.startsWith('fe9') || hostname.startsWith('fea') || hostname.startsWith('feb') || hostname.startsWith('fc') || hostname.startsWith('fd')) return true
+  if (hostname === '::' || hostname === '::1' || hostname.startsWith('::ffff:') || hostname.startsWith('fe8') || hostname.startsWith('fe9') || hostname.startsWith('fea') || hostname.startsWith('feb') || hostname.startsWith('fec') || hostname.startsWith('fed') || hostname.startsWith('fee') || hostname.startsWith('fef') || hostname.startsWith('fc') || hostname.startsWith('fd')) return true
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname)
   if (!ipv4) return false
   const octets = ipv4.slice(1).map(Number)

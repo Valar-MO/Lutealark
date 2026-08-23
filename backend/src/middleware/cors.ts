@@ -12,9 +12,7 @@ export const CORS_ALLOW_METHODS = [
 ] as const;
 
 export const CORS_ALLOW_HEADERS = [
-  "Authorization",
   "Content-Type",
-  "X-Lutealark-Client",
   "X-Lutealark-User-Id",
 ] as const;
 
@@ -22,8 +20,10 @@ export function createCorsMiddleware(
   configuredOrigins: readonly string[],
 ): MiddlewareHandler {
   const allowedOrigins = new Set(configuredOrigins);
+  const isAllowed = (origin: string, requestUrl: string) =>
+    allowedOrigins.has(origin) || origin === new URL(requestUrl).origin;
   const applyCors = cors({
-    origin: (origin) => allowedOrigins.has(origin) ? origin : null,
+    origin: (origin, context) => isAllowed(origin, context.req.url) ? origin : null,
     allowMethods: [...CORS_ALLOW_METHODS],
     allowHeaders: [...CORS_ALLOW_HEADERS],
     exposeHeaders: ["Content-Disposition", "Retry-After"],
@@ -33,7 +33,7 @@ export function createCorsMiddleware(
 
   return async (context, next) => {
     const origin = context.req.header("Origin");
-    if (context.req.method === "OPTIONS" && origin && !allowedOrigins.has(origin)) {
+    if (origin && !isAllowed(origin, context.req.url)) {
       context.header("Vary", "Origin");
       return context.json(
         { error: "CORS_ORIGIN_DENIED", message: "请求来源不在允许列表中" },

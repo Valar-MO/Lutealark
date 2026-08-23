@@ -30,8 +30,8 @@ const envSchema = z.object({
     .min(0)
     .max(5_000)
     .default(250),
-  // Comma-separated exact origins for native/cross-origin clients. An empty
-  // value keeps the default same-origin deployment closed to CORS.
+  // Comma-separated exact origins for optional local development tools. An
+  // empty value keeps the default local proxy setup closed to CORS.
   CORS_ORIGINS: z.string().default(""),
 });
 
@@ -85,18 +85,25 @@ export function openTrekHealth() {
   } as const;
 }
 
+export class OpenTrekConfigurationError extends Error {
+  constructor(readonly missing: readonly string[]) {
+    super(`OpenTrek configuration is missing: ${missing.join(", ")}`);
+    this.name = "OpenTrekConfigurationError";
+  }
+}
+
 export function requireOpenTrekConfig() {
-  const missing = [
+  const missing = ([
     ["OPENTREK_BASE_URL", env.OPENTREK_BASE_URL],
     ["OPENTREK_APP_KEY", env.OPENTREK_APP_KEY],
     ["OPENTREK_AGENT_CODE", env.OPENTREK_AGENT_CODE],
     ["OPENTREK_AGENT_VERSION", env.OPENTREK_AGENT_VERSION],
-  ]
+  ] as const)
     .filter(([, value]) => !value)
     .map(([name]) => name);
 
   if (missing.length > 0) {
-    throw new Error(`OpenTrek configuration is missing: ${missing.join(", ")}`);
+    throw new OpenTrekConfigurationError(missing);
   }
 
   return {

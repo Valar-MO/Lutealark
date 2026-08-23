@@ -52,7 +52,6 @@ export const authSessionResponseSchema = z.object({
   user: authUserSchema,
   expiresAt: z.string().datetime({ offset: true }),
   dataMerge: dataMergeStatusSchema,
-  accessToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional(),
 });
 
 export const authMeResponseSchema = z.discriminatedUnion("authenticated", [

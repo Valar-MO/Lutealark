@@ -3,7 +3,11 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { ZodError } from "zod";
 import { OpenTrekError } from "./clients/opentrek.js";
-import { corsOrigins, openTrekHealth } from "./config/env.js";
+import {
+  corsOrigins,
+  OpenTrekConfigurationError,
+  openTrekHealth,
+} from "./config/env.js";
 import {
   createAgentSessionInputSchema,
   dailyCheckinSchema,
@@ -33,6 +37,12 @@ import {
 } from "./contracts/product-features.js";
 import { DatabaseUnavailableError } from "./db/pool.js";
 import { createCorsMiddleware } from "./middleware/cors.js";
+import {
+  agentClientKey,
+  type AgentOperation,
+  type AgentTrafficGuard,
+  MemoryAgentTrafficGuard,
+} from "./middleware/agent-traffic.js";
 import {
   MemoryAgentSessionBindingRepository,
   postgresAgentSessionBindingRepository,
@@ -82,6 +92,8 @@ export interface AppDependencies {
   agentSessionBindingRepository?: AgentSessionBindingRepository;
   authenticationService?: AuthService;
   corsOrigins?: readonly string[];
+  agentTrafficGuard?: AgentTrafficGuard;
+  agentClientKey?: (request: Request) => string;
 }
 
 const defaultDependencies: AppDependencies = {
@@ -112,6 +124,9 @@ export function createApp(
   const authenticationService = dependencies.authenticationService
     ?? authService;
   const allowedCorsOrigins = dependencies.corsOrigins ?? corsOrigins;
+  const agentTrafficGuard = dependencies.agentTrafficGuard
+    ?? new MemoryAgentTrafficGuard();
+  const getAgentClientKey = dependencies.agentClientKey ?? agentClientKey;
   const trpcRouter = createAppRouter({
     personalDataRepository,
     productFeaturesRepository,
@@ -145,18 +160,44 @@ export function createApp(
   app.use("/api/memories", preventPersonalDataCaching);
   app.use("/api/memories/*", preventPersonalDataCaching);
   app.use("/trpc/*", preventPersonalDataCaching);
-  app.use(
-    "/api/*",
-    bodyLimit({
-      maxSize: 256 * 1024,
-      onError: (c) => c.json(
-        { error: "PAYLOAD_TOO_LARGE", message: "请求内容过大" },
-        413,
-      ),
-    }),
-  );
+  const apiBodyLimit = bodyLimit({
+    maxSize: 256 * 1024,
+    onError: (context) => context.json(
+      { error: "PAYLOAD_TOO_LARGE", message: "请求内容过大" },
+      413,
+    ),
+  });
+  app.use("/api/*", apiBodyLimit);
+  app.use("/trpc/*", apiBodyLimit);
 
   app.route("/api/auth", createAuthRoutes({ service: authenticationService }));
+
+  class InvalidJsonBodyError extends Error {}
+  class AgentTrafficLimitError extends Error {
+    constructor(readonly retryAfterSeconds: number) {
+      super("Agent request limit exceeded");
+    }
+  }
+  const jsonBody = async (context: { req: { json(): Promise<unknown> } }) => {
+    try {
+      return await context.req.json();
+    } catch {
+      throw new InvalidJsonBodyError();
+    }
+  };
+  const withAgentTrafficGuard = async <T>(
+    operation: AgentOperation,
+    request: Request,
+    action: () => Promise<T>,
+  ): Promise<T> => {
+    const lease = agentTrafficGuard.enter(operation, getAgentClientKey(request));
+    if (!lease.allowed) throw new AgentTrafficLimitError(lease.retryAfterSeconds);
+    try {
+      return await action();
+    } finally {
+      lease.release();
+    }
+  };
 
   app.get("/", (c) =>
     c.json({
@@ -506,55 +547,57 @@ export function createApp(
   });
 
   app.post("/api/agent/session", async (c) => {
-    const requestedInput = createAgentSessionInputSchema.parse(
-      await c.req.json().catch(() => ({})),
-    );
-    const identity = await resolveAgentRequestIdentity(
-      () => authenticationService.resolveRequestUser(c.req.raw),
-    );
-    const input = {
-      ...requestedInput,
-      memoryUserId: remoteAgentMemoryUserId(identity.user),
-    };
-    const result = await createAgentSession(input);
-    await agentSessionBindings.bindCreatedSession(
-      result.sessionCode,
-      agentSessionSubject(identity.user),
-      identity.databaseUnavailable,
-    );
-    return c.json(result, 201);
+    return withAgentTrafficGuard("session", c.req.raw, async () => {
+      const requestedInput = createAgentSessionInputSchema.parse(await jsonBody(c));
+      const identity = await resolveAgentRequestIdentity(
+        () => authenticationService.resolveRequestUser(c.req.raw),
+      );
+      const input = {
+        ...requestedInput,
+        memoryUserId: remoteAgentMemoryUserId(identity.user),
+      };
+      const result = await createAgentSession(input);
+      await agentSessionBindings.bindCreatedSession(
+        result.sessionCode,
+        agentSessionSubject(identity.user),
+        identity.databaseUnavailable,
+      );
+      return c.json(result, 201);
+    });
   });
 
   app.post("/api/agent/chat", async (c) => {
-    const input = runAgentInputSchema.parse(await c.req.json());
-    const identity = await resolveAgentRequestIdentity(
-      () => authenticationService.resolveRequestUser(c.req.raw),
-    );
-    const subject = agentSessionSubject(identity.user);
-    const authorization = await agentSessionBindings.authorizeSession(
-      input.sessionCode,
-      subject,
-      identity.databaseUnavailable,
-    );
-    const memories = authorization.bound
-      ? await loadAgentMemoryContext(
-        memoryRepository,
-        identity.user?.userId,
-        input.message,
-      )
-      : [];
-    const result = await runAgent(input, { memories });
-    await agentSessionBindings.bindReplacementSession(
-      input.sessionCode,
-      result.sessionCode,
-      subject,
-      identity.databaseUnavailable,
-    );
-    return c.json(result);
+    return withAgentTrafficGuard("chat", c.req.raw, async () => {
+      const input = runAgentInputSchema.parse(await jsonBody(c));
+      const identity = await resolveAgentRequestIdentity(
+        () => authenticationService.resolveRequestUser(c.req.raw),
+      );
+      const subject = agentSessionSubject(identity.user);
+      const authorization = await agentSessionBindings.authorizeSession(
+        input.sessionCode,
+        subject,
+        identity.databaseUnavailable,
+      );
+      const memories = authorization.bound
+        ? await loadAgentMemoryContext(
+          memoryRepository,
+          identity.user?.userId,
+          input.message,
+        )
+        : [];
+      const result = await runAgent(input, { memories });
+      await agentSessionBindings.bindReplacementSession(
+        input.sessionCode,
+        result.sessionCode,
+        subject,
+        identity.databaseUnavailable,
+      );
+      return c.json(result);
+    });
   });
 
   app.post("/api/workflow/cycle", async (c) => {
-    const input = cycleInputSchema.parse(await c.req.json());
+    const input = cycleInputSchema.parse(await jsonBody(c));
     return c.json(calculateCycle(input));
   });
 
@@ -586,6 +629,13 @@ export function createApp(
   );
 
   app.onError((error, c) => {
+    if (error instanceof InvalidJsonBodyError) {
+      return c.json({ error: "INVALID_JSON", message: "请求内容不是有效 JSON" }, 400);
+    }
+    if (error instanceof AgentTrafficLimitError) {
+      c.header("Retry-After", String(error.retryAfterSeconds));
+      return c.json({ error: "RATE_LIMITED", message: "请求过于频繁，请稍后再试" }, 429);
+    }
     if (error instanceof ZodError) {
       return c.json(
         { error: "INVALID_INPUT", message: "请求参数不正确", details: error.issues },
@@ -627,6 +677,12 @@ export function createApp(
       return c.json(
         { error: "OPENTREK_ERROR", message: error.message, code: error.code },
         status,
+      );
+    }
+    if (error instanceof OpenTrekConfigurationError) {
+      return c.json(
+        { error: "OPENTREK_UNAVAILABLE", message: "OpenTrek 在线服务尚未正确配置" },
+        503,
       );
     }
 

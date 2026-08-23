@@ -45,7 +45,7 @@ export function fetchPersonalData(subject: DataSubject = getActiveDataSubject())
   const key = dataSubjectKey(subject)
   const existing = snapshotRequests.get(key)
   if (existing) return existing
-  const request = personalDataRequest<PersonalDataSnapshot>('/api/personal-data')
+  const request = personalDataRequest<PersonalDataSnapshot>('/api/personal-data', undefined, subject)
     .finally(() => { snapshotRequests.delete(key) })
   snapshotRequests.set(key, request)
   return request
@@ -59,7 +59,7 @@ export async function syncCycleSettings(
   const syncVersion = beginSync(syncKey)
   markPersonalDataPending({ cycle: true }, subject)
   const result = await runMutation(syncKey, () => (
-    personalDataRequest<CycleSettings>('/api/personal-data/cycle', settings)
+    personalDataRequest<CycleSettings>('/api/personal-data/cycle', settings, subject)
   ))
   if (isLatestSync(syncKey, syncVersion)) {
     updatePending(subject, (pending) => ({ ...pending, cycle: false }))
@@ -75,7 +75,7 @@ export async function syncDailyCheckin(
   const syncVersion = beginSync(syncKey)
   markPersonalDataPending({ checkinDates: [checkin.date] }, subject)
   const result = await runMutation(syncKey, () => (
-    personalDataRequest<DailyCheckIn>('/api/personal-data/checkin', checkin)
+    personalDataRequest<DailyCheckIn>('/api/personal-data/checkin', checkin, subject)
   ))
   if (isLatestSync(syncKey, syncVersion)) {
     updatePending(subject, (pending) => ({
@@ -94,7 +94,7 @@ export async function syncBreathingRecord(
   const syncVersion = beginSync(syncKey)
   markPersonalDataPending({ breathingRecordIds: [record.id] }, subject)
   const result = await runMutation(syncKey, () => (
-    personalDataRequest<BreathingRecord>('/api/personal-data/breathing', record)
+    personalDataRequest<BreathingRecord>('/api/personal-data/breathing', record, subject)
   ))
   if (isLatestSync(syncKey, syncVersion)) {
     updatePending(subject, (pending) => ({
@@ -113,7 +113,7 @@ export async function deleteDailyCheckin(
   const syncVersion = beginSync(syncKey)
   markPersonalDataPending({ deletedCheckinDates: [date] }, subject)
   await runMutation(syncKey, () => (
-    personalDataDelete(`/api/personal-data/checkin/${encodeURIComponent(date)}`)
+    personalDataDelete(`/api/personal-data/checkin/${encodeURIComponent(date)}`, subject)
   ))
   if (isLatestSync(syncKey, syncVersion)) {
     updatePending(subject, (pending) => ({
@@ -131,7 +131,7 @@ export async function deleteBreathingRecord(
   const syncVersion = beginSync(syncKey)
   markPersonalDataPending({ deletedBreathingRecordIds: [recordId] }, subject)
   await runMutation(syncKey, () => (
-    personalDataDelete(`/api/personal-data/breathing/${encodeURIComponent(recordId)}`)
+    personalDataDelete(`/api/personal-data/breathing/${encodeURIComponent(recordId)}`, subject)
   ))
   if (isLatestSync(syncKey, syncVersion)) {
     updatePending(subject, (pending) => ({
@@ -284,7 +284,12 @@ export function reconcilePersonalDataCollections(
   }
 }
 
-async function personalDataRequest<T>(path: string, body?: unknown): Promise<T> {
+async function personalDataRequest<T>(
+  path: string,
+  body: unknown | undefined,
+  subject: DataSubject,
+): Promise<T> {
+  assertSubjectCurrent(subject)
   const headers: Record<string, string> = { 'X-Lutealark-User-Id': getOrCreateDeviceId() }
   const init: RequestInit = body === undefined
     ? { method: 'GET', headers }
@@ -296,8 +301,9 @@ async function personalDataRequest<T>(path: string, body?: unknown): Promise<T> 
   return requestJson<T>(path, init, PERSONAL_DATA_TIMEOUT_MS)
 }
 
-async function personalDataDelete(path: string): Promise<void> {
+async function personalDataDelete(path: string, subject: DataSubject): Promise<void> {
   try {
+    assertSubjectCurrent(subject)
     await requestJson<{ deleted: true }>(path, {
       method: 'DELETE',
       headers: { 'X-Lutealark-User-Id': getOrCreateDeviceId() },
@@ -305,6 +311,12 @@ async function personalDataDelete(path: string): Promise<void> {
   } catch (cause) {
     if (cause instanceof ApiRequestError && cause.status === 404) return
     throw cause
+  }
+}
+
+function assertSubjectCurrent(subject: DataSubject) {
+  if (dataSubjectKey(getActiveDataSubject()) !== dataSubjectKey(subject)) {
+    throw new Error('数据主体已变更，已取消旧数据同步。')
   }
 }
 

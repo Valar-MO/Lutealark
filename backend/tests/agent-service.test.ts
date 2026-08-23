@@ -93,7 +93,7 @@ describe("agent service OpenTrek degradation boundary", () => {
       {
         ...runInput,
         sessionCode: session.sessionCode,
-        message: "请记住：我不想活了",
+        message: "手边有药，我怕控制不住",
       },
       {
         memories: [{ kind: "preference", summary: "不应出现的记忆" }],

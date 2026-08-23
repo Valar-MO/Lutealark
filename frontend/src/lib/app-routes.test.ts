@@ -4,7 +4,6 @@ import {
   DEFAULT_APP_PATH,
   navigateBackToCycle,
   pathForView,
-  resolveNativeBackAction,
   viewFromPath,
 } from './app-routes'
 
@@ -32,12 +31,5 @@ describe('application route contracts', () => {
 
     expect(openView).toHaveBeenCalledTimes(1)
     expect(openView).toHaveBeenCalledWith('cycle')
-  })
-
-  it('maps the Android system back button without losing the chat session', () => {
-    expect(resolveNativeBackAction('/cycle', true)).toBe('exit-app')
-    expect(resolveNativeBackAction('/agent', true)).toBe('go-cycle')
-    expect(resolveNativeBackAction('/tools', true)).toBe('history-back')
-    expect(resolveNativeBackAction('/tools', false)).toBe('go-cycle')
   })
 })

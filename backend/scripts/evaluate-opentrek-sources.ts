@@ -28,6 +28,7 @@ interface SourceEvaluationResult {
   expectedSourceIds: string[];
   actualSourceIds: string[];
   sourceCount: number;
+  ragUsed: boolean;
   top3IdHit: boolean;
   nonEmpty: boolean;
   elapsedMs: number;
@@ -66,6 +67,7 @@ async function evaluateCase(
       : null;
     const intentMatches = actualIntent === item.expectedIntent;
     const actualSourceIds = sources.map((source) => source.sourceId);
+    const ragUsed = response.metadata.ragUsed === true;
     const top3IdHit = actualSourceIds.some((sourceId) =>
       item.expectedSourceIds.includes(sourceId),
     );
@@ -79,11 +81,12 @@ async function evaluateCase(
       expectedSourceIds: item.expectedSourceIds,
       actualSourceIds,
       sourceCount: sources.length,
+      ragUsed,
       top3IdHit,
       nonEmpty,
       elapsedMs: Math.round(performance.now() - startedAt),
       error: null,
-      passed: nonEmpty && intentMatches && sources.length > 0 && top3IdHit,
+      passed: nonEmpty && intentMatches && ragUsed && sources.length > 0 && top3IdHit,
     };
   } catch (error) {
     return {
@@ -94,6 +97,7 @@ async function evaluateCase(
       expectedSourceIds: item.expectedSourceIds,
       actualSourceIds: [],
       sourceCount: 0,
+      ragUsed: false,
       top3IdHit: false,
       nonEmpty: false,
       elapsedMs: Math.round(performance.now() - startedAt),

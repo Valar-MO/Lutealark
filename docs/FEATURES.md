@@ -4,11 +4,13 @@
 
 - 最后核对日期：2026-08-22
 - 当前 OpenTrek 基线：`1785250561438`
-- 当前本地运行模式：`auto`（优先 OpenTrek，网络/5xx 故障时诚实降级）
+- 新克隆模板模式：`offline`（先验证本地 PostgreSQL、后端和前端）；维护者联网测试使用 `auto`
 - 项目首页：[README.md](../README.md)
 - 平台配置：[opentrek/README.md](../opentrek/README.md)
 
 > Lutealark 是日常自我支持工具，不提供医疗诊断或治疗，也不能替代专业医疗服务或紧急援助。
+
+本仓库只维护个人电脑浏览器版本；OpenTrek 章节中的“部署”仅指复制、配置和发布专有云平台上的候选 Agent 版本。
 
 ## 1. 产品定位与设计原则
 
@@ -38,9 +40,9 @@ Lutealark 面向希望同时照顾 ADHD 特征、周期变化和当下能量的�
 
 `/cycle` 是应用主页；`/` 和未知路径都会回退到 `/cycle`。应用使用真实浏览器 URL，前进和后退可以恢复页面。
 
-移动端底部导航和桌面侧栏均覆盖七个主要页面。Agent 返回确认后的 `action` 时，还可以直接打开对应功能并定位到指定区域。
+窄屏底部导航和桌面侧栏均覆盖七个主要页面。Agent 返回确认后的 `action` 时，还可以直接打开对应功能并定位到指定区域。
 
-水彩海岸图 `frontend/public/assets/background.jpg` 同时直接应用到可见的应用大卡片、周期主面板、Agent 入口面板和全屏聊天面板，而不是只放在页面外围；周期曲线/记录主卡和 Agent 欢迎卡本身也直接叠加同一图片。应用框和主面板桌面取景使用纵向 70%，主卡使用 78% 以露出海岸，移动端应用框/主面板使用居中取景；浅色半透明遮罩与高不透明度的输入框和安全面板继续保证可读性。
+水彩海岸图 `frontend/public/assets/background.jpg` 同时直接应用到可见的应用大卡片、周期主面板、Agent 入口面板和全屏聊天面板，而不是只放在页面外围；周期曲线/记录主卡和 Agent 欢迎卡本身也直接叠加同一图片。应用框和主面板桌面取景使用纵向 70%，主卡使用 78% 以露出海岸，窄屏应用框/主面板使用居中取景；浅色半透明遮罩与高不透明度的输入框和安全面板继续保证可读性。
 
 ## 3. Agent 对话支持
 
@@ -324,7 +326,8 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 ### 9.1 匿名模式
 
 - 首次使用生成稳定设备 UUID，作为本机数据分区键。
-- 匿名 UUID 不是认证凭据，不应被当作公开部署下的安全身份。
+- 匿名 UUID 只是本机数据分区键，不是认证凭据。
+- 服务端会在接受匿名 UUID 前检查它尚未对应注册账号、也未被其他账号认领；已注册账号 UUID 或已认领设备 UUID 即使被伪造到请求头，也不会作为匿名身份访问数据。有效登录 Cookie 始终优先。
 - 未登录时可使用本地功能，并在数据库可用时按匿名主体同步。
 - 真正跨设备同步需要注册并登录账号。
 
@@ -333,7 +336,6 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 - 支持邮箱和密码注册、登录、登录状态检查和注销。
 - 邮箱会标准化；注册和登录有邮箱/客户端维度的有界限速。
 - Web 登录使用 HttpOnly Cookie，前端拿不到会话 token。
-- Android 原生 App 使用安全存储中的 bearer Token；只有精确的 Capacitor WebView 来源和客户端标记会让注册/登录响应返回该 Token，无效 bearer 不会回退为 Cookie 或匿名身份。
 - Cookie 身份存在时优先于匿名 UUID。
 - 账号切换后清空当前 Agent Session 和运行中聊天状态，避免跨主体混用。
 
@@ -350,7 +352,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 
 登录账号可以生成带 schemaVersion 的完整 JSON 导出，包含账号元数据、已认领设备、周期、状态、呼吸、对话消息、计划、活动、积分和长期记忆。
 
-网页端使用 Blob 下载 JSON；Android 端使用 Filesystem 写入私有临时缓存并调用系统 Share 面板，分享成功、取消或失败后都会尽力清理临时文件。
+浏览器使用 Blob 下载 JSON。
 
 导出不包含密码哈希、salt、登录 token 或 Agent Session Code。PostgreSQL 使用一致性快照读取，导出包含全量历史，而不是页面最近 30 条窗口。
 
@@ -362,7 +364,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 2. 再次输入当前账号邮箱，降低误触风险。
 3. 后端重新验证当前密码。
 4. 在事务中删除账号根记录并级联删除业务数据、登录会话、设备认领和 Agent Session 绑定。
-5. 清除 Web Cookie 或 Android bearer Token，以及当前本地账号态。
+5. 清除浏览器 Cookie，以及当前本地账号态。
 
 应用层删除不等同于立即擦除数据库备份或 WAL；生产环境仍需单独制定物理备份留存策略。
 
@@ -376,6 +378,11 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 - 登录账号：`account:<userId>`
 
 周期、状态、呼吸、计划、活动 outbox 和待同步信息不会在不同主体之间直接复用。
+
+账号切换和跨标签页同步还会清空旧主体的 Agent Session、当前对话和输入框。正在进行的
+个人数据、对话、档案、积分和工具请求会在发送前后检查主体；如果主体已经变化，旧响应和旧
+写入会被丢弃，不会覆盖新账号页面。会话建立、重连、发送和同步操作还会追踪登录世代；旧请求的 `finally` 不会清除新主体的 loading 或同步状态。聊天发送使用同步操作锁，连续点击不会在 React 状态提交前重复发送。页面重新获得焦点、`pageshow` 和上海业务日期跨午夜时
+也会重新确认主体和当天数据。
 
 ### 10.2 正常写入
 
@@ -406,7 +413,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 | 模式 | 行为 |
 |---|---|
 | `offline` | 从不请求 OpenTrek，只运行本地基础支持，`ragUsed=false`、`sources=[]` |
-| `auto` | 优先 OpenTrek；网络错误或可重试的 5xx 可安全降级，业务/4xx 错误不会伪装成功。当前默认模式 |
+| `auto` | 优先 OpenTrek；网络错误或可重试的 5xx 可安全降级，业务/4xx 错误不会伪装成功。维护者联网测试模式；新克隆模板默认不用它 |
 | `online` | 强制使用 OpenTrek，不允许离线降级，适合联网调试 |
 
 本地克隆运行时，先复制 `backend/.env.example` 为 `backend/.env`，填写本机
@@ -415,7 +422,12 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 先连接 VPN，再由管理员安全提供 `OPENTREK_BASE_URL`、`OPENTREK_APP_KEY`、
 `OPENTREK_AGENT_CODE`，并保持 Agent version `1785250561438`。密钥只放在本机 `.env`，
 不能进入 GitHub。每位使用者都必须在自己的电脑上重复安装 PostgreSQL、运行后端和前端；
-`localhost` 不是可共享的公网地址。
+`localhost` 不是可共享地址。
+离线本地运行不需要 VPN；VPN 只在进行在线 OpenTrek 测试时需要。
+
+项目根目录的 `.nvmrc` 固定 Node.js `24.16.0`。macOS 用户可用 nvm 切换该版本；没有
+nvm 时，从 Node.js 官方下载页安装对应版本后重新打开终端。Windows 用户也应安装
+`24.16.0`，再执行依赖安装和迁移命令。
 
 仓库不保存专网网关默认值。`offline` 模式允许 OpenTrek 配置留空；`auto` 和 `online` 必须
 在本机 `.env` 中显式提供网关地址、APP_KEY、Agent code 和 Agent version，缺少任一项时
@@ -426,7 +438,7 @@ Agent 只能生成候选摘要，不能直接保存。保存流程为：
 
 OpenTrek 客户端在总超时预算内最多尝试两次；默认创建 Session 超时 10 秒、运行超时 60 秒、重试间隔 250 毫秒。业务错误、4xx 和显式 `online` 模式不会被包装成离线成功。
 
-`GET /health/opentrek` 是不含密钥的本地配置检查，只返回 `mode`、`configured`、`agentVersion` 和配置状态；`ready` 不代表网关或 RAG 已经通过运行检查。2026-08-19 当前版本曾成功完成在线 Session 与普通/周期问答，之后平台又出现 Session 数据库只读事务和 `run` 无消息。2026-08-20 的六次全新探测曾返回 `mode=offline`。2026-08-22 最新实测创建了在线 Session，并发送周期问题“黄体晚期为什么更容易注意力飘和疲惫？请结合可靠资料解释个体差异，并给出可核验的来源”，路由为 `cycle_question`、回复非空，但 metadata 未包含 `ragUsed=true`，来源为空，因此前端保持“OpenTrek 在线 · 未确认使用 RAG”。这证明在线问答可达，但不证明当前发布基线已经完成知识库检索或来源回传。
+`GET /health/opentrek` 是不含密钥的本地配置检查，只返回 `mode`、`configured`、`agentVersion` 和配置状态；`ready` 不代表网关或 RAG 已经通过运行检查。2026-08-19 当前版本曾成功完成在线 Session 与普通/周期问答，之后平台又出现 Session 数据库只读事务和 `run` 无消息。2026-08-20 的六次全新探测曾返回 `mode=offline`。2026-08-22 早先一次实测创建了在线 Session，并发送周期问题，路由为 `cycle_question`、回复非空，但 metadata 未包含 `ragUsed=true`，来源为空，因此前端保持“OpenTrek 在线 · 未确认使用 RAG”；本轮最新探测在创建 Session 时于 10 秒超时，`auto` 模式诚实降级为离线。这证明当前链路不稳定，也不证明当前发布基线已经完成知识库检索或来源回传。
 
 ### 11.2 OpenTrek 规格包
 
@@ -444,11 +456,11 @@ OpenTrek 客户端在总超时预算内最多尝试两次；默认创建 Session
 - 输入与来源标准化脚本
 - 路由、安全和 Q01–Q10 来源评估数据
 
-这些文件是版本控制规格，不会自动部署到 OpenTrek 平台。
+这些文件是版本控制规格，不会自动修改 OpenTrek 平台。
 
 RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机分支应保持 `sources=[]`。
 
-工作流 metadata Schema 要求每个结果显式返回布尔值 `ragUsed`。检索分支只有在同一次运行确实得到 1–3 条可验证来源时才能返回 `ragUsed=true`；`ragUsed=false` 时 Schema 强制 `sources=[]`。缺少该字段、`true` 配空来源、`false` 配非空来源或超过 3 条来源都不符合候选工作流合同。前后端为兼容当前已发布基线仍会保守处理缺失字段，但不会据回答内容推断 RAG。
+工作流 metadata Schema 要求每个结果显式返回 `schemaVersion`、`workflowVersion`、`intent`、`strategy`、布尔值 `ragUsed` 和 `sources`。检索分支只有在同一次运行确实得到 1–3 条可验证来源时才能返回 `ragUsed=true`；`ragUsed=false` 时 Schema 强制 `sources=[]`。缺少字段、`true` 配空来源、`false` 配非空来源或超过 3 条来源都不符合候选工作流合同。后端只按 allowlist 保留这些字段，前端还会要求在线模式、明确的 `ragUsed=true` 和至少一个带 `sourceId` 的来源，绝不根据回答措辞推断 RAG。
 
 ### 11.3 知识来源展示
 
@@ -458,9 +470,13 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 
 - 来源必须来自同一次真实检索结果。
 - `ragUsed=true` 与 1–3 条有效来源必须同时出现；非 RAG 回复必须明确返回 `ragUsed=false` 和空来源。
+- 在线评估逐案例结果会输出 `actualRagUsed`，与 `actualSources` 一起用于排查 RAG 标记和来源证据是否一致；评估通过仍要求意图、来源和安全条件全部满足。
 - 后端校验、去重、截断并清理来源字段。
 - 前端再次校验、去重并限制为 3 条。
-- 可点击链接必须是安全的公网 HTTPS 地址，不接受账号密码、私网主机或带 token/signature 等敏感查询的 URL。
+- 后端兼容一组受限的 OpenTrek 检索字段别名和 `data`/`results` 等有界深度的已命名列表包装；如果前一个包装为空，或其中没有任何同时具备有效 ID 和标题的条目，会继续检查后续包装（例如 `itemId`/`documentId`、`fileName`/`documentName`、`fileUrl`、`chunkContent` 和常见分数字段），先归一化为产品来源合同再校验；意图别名 `crisis_support`、`emotional_support` 会归一为 `safety_crisis`、`emotion_support`，动作别名 `open_pomodoro`、`open_environment_reset`、`open_micro_movement` 会归一为 `open_focus_timer`、`show_environment_reset`、`show_micro_movement`。可选字段不合规时只丢弃该字段，不会连带丢弃已有合法 ID/标题的来源。OpenTrek 单次响应体限制为 2 MiB，避免异常网关响应占用无界内存。必须仍有明确的布尔 `ragUsed=true`、来源 ID 和标题，别名不会推断 RAG。平台 Trace 仍需用于确认真实字段和同次运行的来源归属。
+- RAG 证据仅允许对应 `task_difficulty`、`cycle_question`、`emotion_support` 检索意图；`daily_checkin`、`memory_request`、`smalltalk` 和危机分支会清空误传来源。危机分支强制保留 Schema 要求的中性 `strategy: "none"`，同时清除普通动作和记忆候选，避免误出现周期、工具或任务入口。上游意图、策略和动作不在工作流枚举中的值也会被丢弃。
+- 恢复已保存对话时会在前端再次执行同一意图白名单；历史 metadata 不能仅凭 `ragUsed=true` 和来源字段绕过三类检索意图条件。
+- 可点击链接必须是安全的 HTTPS 地址，不接受账号密码、私网主机或带 token/signature 等敏感查询的 URL；IPv6 `fec0::/10` site-local 地址也会被后端和前端拒绝。
 - 离线、非 RAG 与危机分支必须返回空来源。
 - 平台回显的记忆上下文、内部策略字段和不可信 metadata 不会持久化或展示。
 - 不得暴露内网地址、临时签名 URL 或真实用户对话。
@@ -520,30 +536,25 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - 密码使用每账号独立随机 salt 的 Node `scrypt` 派生，比较使用 timing-safe 操作。
 - 登录 token 使用密码学安全随机数，数据库只保存 SHA-256 哈希。
 - Cookie 为 `HttpOnly; SameSite=Strict`；HTTPS/生产环境增加 `Secure`，默认 30 天过期。
-- Android 使用安全存储中的 bearer Token，不依赖跨源 Cookie；原生 API 地址必须是无凭据、路径、查询或片段的 HTTPS origin。
-- 原生 Token 只对精确的 Capacitor 来源和客户端标记签发；一旦请求提供 Authorization，失败时不会降级成 Cookie 或匿名身份。
+- `X-Lutealark-User-Id` 只可代表尚未注册或认领的匿名设备 UUID；已注册账号 UUID 和已认领设备 UUID 即使格式正确也不会被当作匿名身份，账号数据必须通过有效的 HttpOnly 会话 Cookie 访问。
 - Agent Session Code 不落明文数据库，只保存 SHA-256，并按主体与在线/离线模式绑定 24 小时。
 - 未绑定、过期、模式不符或跨主体复用统一要求重建，不向调用方泄露具体归属。
 - 在线 Session 绑定数据库故障时 fail closed；离线基础回复可在无记忆的前提下降级。
 - 当前是应用层用户隔离，不是 PostgreSQL Row-Level Security。
-- 公网模板已经内置 HTTPS、精确 CORS、可信代理头和安全响应头；正式上线仍需核验实际配置、数据库权限与备份，并在多后端实例前改用共享限速存储。
 
 ## 14. 已验证状态与已知边界
 
-截至 2026-08-22：
+截至 2026-08-22（本轮代码与文档调整后）：
 
-- 后端：19 个测试文件（18 个通过、1 个按条件跳过），202 passed、3 skipped；迁移、TypeScript check 和生产构建通过。3 个账号真库用例仅在 `RUN_AUTH_DB_TESTS=true` 且配置数据库时运行。
-- 前端：14 个测试文件、78/78 passed；lint、生产构建、Capacitor Android 同步和完整依赖审计通过。
-- Android：使用 SDK 36、min SDK 24、target SDK 36 完成 `assembleDebug`、`lintDebug` 和 `testDebugUnitTest`，已生成 debug APK。
-- 前后端 npm audit：0 个已知漏洞。
-- 前端 `/`、七个功能路由与一个未知路径共 9 个请求均返回 HTTP 200 HTML；后端 `/`、`/health`、`/health/opentrek`、`/health/database` 均 HTTP 200。
-- `背景.jpg`、public 资源和 HTTP 服务资源的 SHA-256 一致；HTTP 资源为 200、`image/jpeg`、942×1672、641,943 bytes。
+- 后端 Vitest 普通模式：19 个文件通过、1 个文件按环境跳过，261 个测试通过、4 个测试跳过（4 个均来自数据库测试文件；共 265 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，20 个文件、265 个测试全部通过。前端 Vitest：15 个测试文件、78 个测试全部通过。
+- 后端 `npm run check`、`npm run build`，前端 `npm run lint`、`npm run build` 均通过；前后端 `npm audit` 均报告 0 个已知漏洞。
+- 全新临时 PostgreSQL 数据库的 001–005 迁移全部成功；已有数据库若校验和不一致会被保护性停止，不自动修复。
+- 本机离线 HTTP 冒烟测试实际通过健康检查、数据库、周期计算、Session 创建和任务问答；任务回复明确为 `ragUsed=false`、`sources=[]`。
 - 离线 Session 创建、普通问答、危机优先、动作确认、记忆闭环、跨账号 Session 拒绝、账号导出与删号已完成自动化或真实 HTTP/数据库验证。
-- OpenTrek 路由/安全离线校验为 valid：12 条路由、2 条危机、5 条安全样例。来源校验为 `valid_but_not_ready`；Q01–Q10 均等待真实 Trace/sourceId。
-- OpenTrek 2026-08-22 最新实测成功创建在线 Session 并命中 `cycle_question`，但 `ragUsed` 未返回且来源为空；当前不能确认远端知识库或 RAG 来源可用。
-- 2026-08-22 `ragUsed`/`sources` JSON Schema 回归测试 3/3 通过；完整后端套件 202 passed、3 个需 `RUN_AUTH_DB_TESTS=true` 的账号真库用例按设计 skipped。TypeScript 检查、生产构建、两项离线 OpenTrek 数据校验和后端依赖审计通过；Q01–Q10 仍是 `valid_but_not_ready`，该校验未联网。
-- 公网 Docker Compose、Caddy 和 Nginx 配置已完成静态检查；因当前电脑没有 Docker、云服务器或域名，尚未实际启动生产容器、签发证书或得到公网 URL。
-- 当前没有 Android 真机或模拟器，debug APK 尚未完成安装和设备级交互验收。
+- OpenTrek 路由/安全离线校验：12 条路由、2 条危机、5 条安全样例，状态 `valid`；来源校验状态 `valid_but_not_ready`，Q01–Q10 均等待真实 Trace/sourceId。
+- 危机安全评估会拒绝否定或劝阻紧急渠道、可信任联系人支持的回答，包括在“不建议”后带“你/您”的表达，不以关键词共现代替正向求助建议。
+- OpenTrek 2026-08-22 早先实测曾成功创建在线 Session 并命中 `cycle_question`，但 `ragUsed` 未返回且来源为空；本轮最新应用探测约 11 秒后得到明确的离线 Session，后续周期问题返回 `intent=cycle_question`、`ragUsed=false` 和 0 条来源。`/health/opentrek` 的 `ready` 只表示本机四项配置齐全，不表示 VPN/网关已应答。当前仍不能确认远端知识库或 RAG 来源可用。
+- `ragUsed`/`sources` JSON Schema 回归测试和两项离线 OpenTrek 数据校验均通过；来源集合仍是 `valid_but_not_ready`，这些命令未联网。
 - 内置浏览器插件最终返回空实例列表，因此本次没有完成真实点击、桌面/移动截图或视觉重叠验收。
 
 当前仍需补充的验收证据：
@@ -552,46 +563,13 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - 新候选版本的 Trace、来源字段和 Top-3 召回结果。
 - 真正浏览器中的视觉/点击 E2E，包括七路由直达与前进后退。
 - 真实设备上的麦克风授权、中文转写和错误场景。
-- 真实设备上的原生登录、返回键、JSON 系统分享和断网恢复。
 - 呼吸动画、计时精度和不同屏幕尺寸的人工体验检查。
+
+后端还提供 API 请求体上限（256KB）、Agent 会话/聊天的进程内限速与并发上限、非法 JSON 的统一错误，以及非允许来源的 fail-closed CORS。它们是本机服务的有限保护，不应理解为跨进程或分布式流量防护。
 
 这些是联网或设备级验收边界，不代表对应本地功能代码缺失。
 
-## 15. 公网部署与运行边界
-
-仓库的 `deploy/` 已实现脱离开发电脑运行的 Docker Compose 方案：
-
-- Caddy 是唯一公网入口，开放 80/443、自动申请 HTTPS 证书，并下发 HSTS、CSP、防嵌套、权限策略和 MIME 防嗅探等响应头。
-- `/api`、`/trpc` 和 `/health` 由 Caddy 直接代理到 Hono 后端；其他页面交给 Nginx，所有 React Router 路由均回退到 `index.html`。
-- PostgreSQL 只在 Compose 私有网络中可见，不向宿主机或公网映射 5432；一次性迁移成功后后端才启动。
-- 网站与 API 使用同一 HTTPS 域名，因此 Web Cookie 不需要跨域；Android 接入时后端只额外允许精确的 `https://localhost` 来源。
-- 公网模板默认 `OPENTREK_MODE=offline`，网站不依赖 VPN 或 OpenTrek 即可提供本地基础问答和其他产品功能；账号、同步、积分和服务器档案仍依赖公网后端及 PostgreSQL。
-
-真正上线仍需要云服务器/VPS、Docker Compose v2、域名、DNS 和 80/443 防火墙规则。当前没有这些外部条件，因此代码和配置已经就绪，但尚无真实公网网址。部署、备份与上线检查见 [`deploy/README.md`](../deploy/README.md)。
-
-## 16. Android 工程与移动端边界
-
-当前 React/Vite 前端已通过 Capacitor 封装为 Android 工程，位于 `frontend/android/`，包名为 `com.lutealark.app`。正式方案将 `dist` 打包进本地 WebView，通过构建时 `VITE_API_BASE_URL=https://公网 API 域名` 访问后端，并配合严格 CORS 与原生安全凭据；现有 `SameSite=Strict` 浏览器 Cookie 不能直接当成跨源 App 登录方案。未配置 API 基址时，App 会拒绝原生 API 请求。
-
-`CAPACITOR_SERVER_URL=https://公网站点域名` 仅作为已部署 HTTPS 站点的内部联调模式，不是 Play 发布方案。该 URL 只接受 HTTPS，且不能携带账号、token、签名或其他秘密。
-
-已实现：
-
-- Android 系统返回键：`/agent` 回周期页；其他功能页优先按历史返回，无历史时回周期页；`/cycle` 退出 App。
-- Manifest 声明网络和录音权限，并关闭 Android 系统备份，避免周期、对话等本地数据进入自动备份。
-- 自适应/旧版应用图标复用 `lutealark-bird.png`，启动图复用 `lutealark-logo.png`，已移除 Capacitor 默认图标。
-- Web 端继续使用 HttpOnly Cookie；Android 注册/登录返回专用 bearer Token，并保存到原生安全存储。退出登录和删号会清理该 Token。
-- Android JSON 导出通过 Filesystem 写入私有临时缓存并调起系统 Share 面板，完成、取消或失败后都会尽力删除临时文件；网页端继续使用 Blob 下载。
-- `npm run android:sync` 已通过；使用 Android SDK 36 和 JDK 21 的 `assembleDebug`、`lintDebug`、`testDebugUnitTest` 均成功。本机 debug APK 位于 `frontend/android/app/build/outputs/apk/debug/app-debug.apk`；APK/build 目录不提交到 GitHub，克隆后需要重新构建。
-
-仍待完成：
-
-- 当前 debug APK 没有注入公网 `VITE_API_BASE_URL`，只能验证 UI 和原生封装；公网域名确定后必须重新构建。
-- 语音仍使用 Web Speech API，必须真机验证录音授权、中文转写与错误处理。
-- 当前没有真机或模拟器；还需验证安装、登录、同步、系统分享、弱网、返回键、录音权限和多尺寸布局。
-- Play 发布还需完成签名 AAB、版本策略、App Links、隐私政策和 Play Data Safety。
-
-## 17. 已确认的架构替代
+## 15. 已确认的架构替代
 
 原始计划中的部分技术形式已经用更适合当前系统的实现替代：
 
@@ -601,7 +579,7 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - 积分由后端确定性账本计算，不由模型或平台节点自由决定。
 - 周期设置、今日记录和近期历史目前分别传输；合并为统一 `personalContext` 是可选重构，不影响现有功能。
 
-## 18. 文档同步规则
+## 16. 文档同步规则
 
 仓库根目录的《当前进度.docx》是早期阶段的历史进度快照；本文件和实际代码/测试是当前功能状态的主要依据。
 
@@ -619,4 +597,4 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 - [ ] 新增或删除的页面、路由、接口、迁移和配置已记录。
 - [ ] 验证数字来自本次实际执行，不沿用未经复测的旧数字。
 - [ ] 在线、离线、代码已实现和平台已发布四种状态没有混写。
-- [ ] 文档、示例和日志中不包含 APP_KEY、密码、会话 token 或真实用户数据。
+- [ ] 文档、示例和日志中不包含 APP_KEY、密码、会话 token、内部签名链接或真实用户数据。

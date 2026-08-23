@@ -52,6 +52,8 @@ describe("trusted agent memory context", () => {
       memory("我最近睡不好"),
       memory("我今天状态很好"),
       memory("I am anxious today"),
+      memory("我有抑郁症"),
+      memory("我的检验结果和血压记录"),
     ]);
 
     await expect(loadAgentMemoryContext(
@@ -79,11 +81,18 @@ describe("trusted agent memory context", () => {
       .toBeLessThanOrEqual(1_200);
   });
 
-  it("does not query memory for crisis or an unresolved subject", async () => {
+  it.each([
+    "我不想活了",
+    "我不安全",
+    "手边有药，我怕控制不住",
+  ])("does not query memory for a crisis disclosure: %s", async (message) => {
     const repo = repository([memory("安全偏好")]);
+    await expect(loadAgentMemoryContext(repo, USER_A, message)).resolves.toEqual([]);
+    expect(repo.list).not.toHaveBeenCalled();
+  });
 
-    await expect(loadAgentMemoryContext(repo, USER_A, "我不想活了"))
-      .resolves.toEqual([]);
+  it("does not query memory for an unresolved subject", async () => {
+    const repo = repository([memory("安全偏好")]);
     await expect(loadAgentMemoryContext(repo, undefined, "论文开始不了"))
       .resolves.toEqual([]);
     expect(repo.list).not.toHaveBeenCalled();
