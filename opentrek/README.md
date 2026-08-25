@@ -12,8 +12,10 @@ The repository template defaults to `OPENTREK_MODE=offline`, so a new clone can
 verify PostgreSQL, backend and frontend without the private network. Maintainer
 online testing uses `auto` with Agent version `1785250561438`: it tries
 OpenTrek first and falls back to the explicit local assistant only for
-connectivity or retryable 5xx failures. `offline` never calls OpenTrek and
-never claims to use RAG.
+connectivity failures, timeouts, retryable 5xx failures, or an HTTP 200 response
+that still has no valid Session or message content after the bounded retry.
+Authentication and other 4xx failures remain explicit errors. `offline` never
+calls OpenTrek and never claims to use RAG.
 
 For a GitHub clone running on a developer computer, copy
 `backend/.env.example` to `backend/.env`, configure the local PostgreSQL
@@ -62,7 +64,9 @@ The frontend now detects initial, cached, and run-time `offline:` Sessions. It
 performs at most two bounded automatic replacement attempts on restoration
 events and also exposes a manual "Reconnect OpenTrek" action. A successful
 replacement affects later turns without deleting the conversation. Historical
-offline turns retain their honest label, and an online turn is labelled as RAG
+offline turns retain their honest one-line label. In `auto` mode, a retryable
+OpenTrek failure produces a normal local reply plus that label instead of an
+orphaned user message. An online turn is labelled as RAG
 only when `ragUsed=true` and at least one validated source is present. Restored
 conversation metadata is checked again in the browser; only the three retrieval
 intents can expose sources, so an old or malformed message cannot gain a RAG

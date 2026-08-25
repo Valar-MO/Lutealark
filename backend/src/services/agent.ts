@@ -80,7 +80,7 @@ function asOfflineInput(input: RunAgentInput): RunAgentInput {
 
 function isConnectivityFailure(error: unknown): boolean {
   if (error instanceof OpenTrekError) {
-    return error.status === undefined || error.status >= 500;
+    return error.retryable || error.status === undefined || error.status >= 500;
   }
   return error instanceof Error
     && error.message.startsWith("OpenTrek configuration is missing:");

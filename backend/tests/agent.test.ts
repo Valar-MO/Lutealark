@@ -676,6 +676,7 @@ describe("OpenTrek agent client", () => {
       name: "OpenTrekError",
       status: 200,
       code: "UPSTREAM_PENDING",
+      retryable: true,
       message: expect.stringContaining("failed after 2 attempts"),
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -741,6 +742,7 @@ describe("OpenTrek agent client", () => {
     await expect(runOpenTrekAgent(runInput)).rejects.toMatchObject({
       name: "OpenTrekError",
       status: 200,
+      retryable: true,
       message: expect.stringContaining("response exceeded the 2 MiB limit"),
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);

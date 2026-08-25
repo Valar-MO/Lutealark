@@ -979,7 +979,6 @@ function App() {
               settings={cycleSettings}
               result={cycleResult}
               onSave={saveCycle}
-              disabled={isSending || isConnecting}
               onOpenChat={openChat}
               onPrompt={(text) => { setIsChatOpen(true); void submitMessage(text) }}
               onAction={(action) => openAction(action, openView)}
@@ -1079,11 +1078,10 @@ function Sidebar({ view, openView, cycleResult }: { view: AppView; openView: (vi
   )
 }
 
-function AgentHome({ settings, result, onSave, disabled, onOpenChat, onPrompt, onAction, onRecordFeeling, onBack }: {
+function AgentHome({ settings, result, onSave, onOpenChat, onPrompt, onAction, onRecordFeeling, onBack }: {
   settings: CycleSettings | null
   result: CycleResult | null
   onSave: (settings: CycleSettings) => Promise<void>
-  disabled: boolean
   onOpenChat: () => void
   onPrompt: (text: string) => void
   onAction: (action: string) => void
@@ -1097,7 +1095,7 @@ function AgentHome({ settings, result, onSave, disabled, onOpenChat, onPrompt, o
           <span aria-hidden="true">←</span><span>返回周期</span>
         </button>
         <CycleDesignPanel settings={settings} result={result} onSave={onSave} showRecordButton={false} />
-        <AgentEntryCard disabled={disabled} onOpen={onOpenChat} onPrompt={onPrompt} onAction={onAction} onRecordFeeling={onRecordFeeling} />
+        <AgentEntryCard onOpen={onOpenChat} onPrompt={onPrompt} onAction={onAction} onRecordFeeling={onRecordFeeling} />
       </div>
     </section>
   )

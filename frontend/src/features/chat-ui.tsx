@@ -59,7 +59,6 @@ export type ChatExperienceProps = {
 }
 
 export type AgentEntryCardProps = {
-  disabled: boolean
   onOpen: () => void
   onPrompt: (text: string) => void
   onAction: (action: string) => void
@@ -98,7 +97,7 @@ const crisisInputPattern = /(想死|不想活|活不下去|自杀|轻生|伤害�
 const emotionalPattern = /(烦|累|崩溃|难过|焦虑|低落|疲惫|压力|委屈|心慌|想哭|懵|超载)/
 
 /** Home-page entry. The full chat is mounted only after this card is opened. */
-export function AgentEntryCard({ disabled, onOpen, onPrompt, onAction, onRecordFeeling }: AgentEntryCardProps) {
+export function AgentEntryCard({ onOpen, onPrompt, onAction, onRecordFeeling }: AgentEntryCardProps) {
   const [promptCounts, setPromptCounts] = useState<QuickPromptCounts>(loadPromptCounts)
   const [showQuickMenu, setShowQuickMenu] = useState(false)
   const longPressTimer = useRef<number | null>(null)
@@ -136,14 +135,14 @@ export function AgentEntryCard({ disabled, onOpen, onPrompt, onAction, onRecordF
   return (
     <section className="agent-entry-stage" aria-label="打开 Lutealark 对话">
       <div className="chat-welcome-prompts">
-        {orderedPrompts.slice(0, 3).map(({ prompt }) => <button key={prompt.id} type="button" disabled={disabled} onClick={() => sendPrompt(prompt.text)}>{prompt.text.replace(/[。？！，、]/g, '')}</button>)}
+        {orderedPrompts.slice(0, 3).map(({ prompt }) => <button key={prompt.id} type="button" onClick={() => sendPrompt(prompt.text)}>{prompt.text.replace(/[。？！，、]/g, '')}</button>)}
       </div>
       <div className="relative">
       {showQuickMenu && <div className="agent-entry-menu" role="menu"><button type="button" onClick={() => { setShowQuickMenu(false); onRecordFeeling() }}>∿ <span>记录感受</span></button><button type="button" onClick={() => onAction('open_breathing')}>◌ <span>开始呼吸</span></button><button type="button" onClick={() => onAction('open_cycle')}>◒ <span>查看周期</span></button></div>}
       <button type="button" className="chat-welcome-card" onPointerDown={beginLongPress} onPointerUp={finishPress} onPointerCancel={finishPress} onPointerLeave={finishPress} onContextMenu={(event) => event.preventDefault()} onClick={() => {
         if (longPressTriggered.current) { longPressTriggered.current = false; return }
         onOpen()
-      }} disabled={disabled}>
+      }}>
         <div className="chat-welcome-copy">
           <div className="chat-welcome-avatar"><img src="/assets/lutealark-bird.png" alt="" /></div>
           <div><h2>今天想聊聊什么？</h2><p>我在这里，不急着要答案</p></div>
@@ -334,7 +333,7 @@ export function ChatExperience(props: ChatExperienceProps) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {props.onNewConversation && <button type="button" className="chat-icon-button chat-new-button" onClick={() => void props.onNewConversation?.()} aria-label="新对话" title="新对话">＋</button>}
+          {props.onNewConversation && <button type="button" className="chat-icon-button chat-new-button" onClick={() => void props.onNewConversation?.()} disabled={props.isSending} aria-label="新对话" title="新对话">＋</button>}
           <button type="button" className={`chat-feeling-button ${props.cycleResult?.isBufferMode ? 'is-warm' : ''}`} onClick={openFeelingSheet} aria-label="记录感受"><span>∿</span><small>感受</small></button>
         </div>
       </div>
@@ -351,7 +350,7 @@ export function ChatExperience(props: ChatExperienceProps) {
 
       <div ref={messagesRef} className="chat-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 lg:px-10" aria-live="polite">
         {props.messages.length === 0 ? (
-          <WelcomeCard orderedPrompts={orderedPrompts} disabled={props.isSending || props.isConnecting || isListening} onPrompt={sendPrompt} onFocus={focusComposer} />
+          <WelcomeCard orderedPrompts={orderedPrompts} disabled={props.isSending || isListening} onPrompt={sendPrompt} onFocus={focusComposer} />
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
             {props.cycleResult && <CyclePill result={props.cycleResult} checkin={props.dailyCheckin} />}
@@ -368,7 +367,7 @@ export function ChatExperience(props: ChatExperienceProps) {
       <div className="chat-composer-wrap">
         {(props.messages.length === 0 || props.isSending) && (
           <div className="chat-prompt-rail" aria-label="快捷短语">
-            {orderedPrompts.slice(0, 5).map(({ prompt }) => <button key={prompt.id} type="button" disabled={props.isSending || props.isConnecting} onClick={() => sendPrompt(prompt.text)}>{prompt.text.replace(/[。？！，、]/g, '')}</button>)}
+            {orderedPrompts.slice(0, 5).map(({ prompt }) => <button key={prompt.id} type="button" disabled={props.isSending} onClick={() => sendPrompt(prompt.text)}>{prompt.text.replace(/[。？！，、]/g, '')}</button>)}
           </div>
         )}
         {emotionalInput && !crisisInput && <div className="chat-feeling-hint"><span>∿</span><span>想快速记录一下此刻的感受吗？</span><button type="button" onClick={openFeelingSheet}>打开记录</button></div>}
