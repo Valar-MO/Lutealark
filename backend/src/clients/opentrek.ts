@@ -118,13 +118,18 @@ export class OpenTrekError extends Error {
     message: string,
     readonly status?: number,
     readonly code?: string | null,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = "OpenTrekError";
   }
 }
 
-class RetryableOpenTrekError extends OpenTrekError {}
+class RetryableOpenTrekError extends OpenTrekError {
+  constructor(message: string, status?: number, code?: string | null) {
+    super(message, status, code, true);
+  }
+}
 
 function responseErrorCode(raw: unknown): string | null | undefined {
   if (!raw || typeof raw !== "object") {
@@ -241,6 +246,9 @@ function timeoutError(
 ): OpenTrekError {
   return new OpenTrekError(
     `OpenTrek ${operation} timed out after ${totalTimeoutMs} ms`,
+    undefined,
+    undefined,
+    true,
   );
 }
 
@@ -313,6 +321,7 @@ async function withLimitedRetry<T>(
         `${normalized.message} (failed after ${MAX_ATTEMPTS} attempts)`,
         normalized.status,
         normalized.code,
+        true,
       );
     }
 

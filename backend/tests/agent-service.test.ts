@@ -6,6 +6,7 @@ const openTrek = vi.hoisted(() => {
       message: string,
       readonly status?: number,
       readonly code?: string,
+      readonly retryable = false,
     ) {
       super(message);
       this.name = "OpenTrekError";
@@ -146,6 +147,29 @@ describe("agent service OpenTrek degradation boundary", () => {
       intent: "task_difficulty",
       ragUsed: false,
       sources: [],
+      notice: expect.any(String),
+    });
+  });
+
+  it("falls back when OpenTrek exhausts a transient HTTP 200 response", async () => {
+    openTrek.runAgent.mockRejectedValueOnce(
+      new openTrek.OpenTrekError(
+        "OpenTrek run returned success=false (failed after 2 attempts)",
+        200,
+        "UPSTREAM_PENDING",
+        true,
+      ),
+    );
+    const { runAgent } = await loadService("auto");
+
+    const reply = await runAgent(runInput);
+
+    expect(reply.content).not.toHaveLength(0);
+    expect(reply.metadata).toMatchObject({
+      mode: "offline",
+      ragUsed: false,
+      sources: [],
+      notice: expect.any(String),
     });
   });
 
