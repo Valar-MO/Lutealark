@@ -2,7 +2,7 @@
 
 本文档介绍 Lutealark 当前已经实现的全部产品功能、交互规则、数据流、安全边界和验收状态。
 
-- 最后核对日期：2026-08-22
+- 最后核对日期：2026-08-25
 - 当前 OpenTrek 基线：`1785250561438`
 - 新克隆模板模式：`offline`（先验证本地 PostgreSQL、后端和前端）；维护者联网测试使用 `auto`
 - 项目首页：[README.md](../README.md)
@@ -49,6 +49,7 @@ Lutealark 面向希望同时照顾 ADHD 特征、周期变化和当下能量的�
 ### 3.1 输入与会话
 
 - 支持普通文本输入、发送中动画、自动滚动、失败提示和对同一消息重新发送。
+- Agent Session/OpenTrek 在后台连接时，聊天入口、快捷短语、输入发送和“新对话”仍保持可操作；只有当前消息实际发送中才阻止重复发送和新建对话。
 - 当前会话状态可从 `sessionStorage` 恢复，用户与助手消息会异步写入 PostgreSQL。
 - 支持浏览器 `SpeechRecognition` / `webkitSpeechRecognition` 连续及临时中文语音转写，语言设置为 `zh-CN`。
 - 语音结果只写入输入框，不会未经确认自动发送。
@@ -438,7 +439,7 @@ nvm 时，从 Node.js 官方下载页安装对应版本后重新打开终端。W
 
 OpenTrek 客户端在总超时预算内最多尝试两次；默认创建 Session 超时 10 秒、运行超时 60 秒、重试间隔 250 毫秒。业务错误、4xx 和显式 `online` 模式不会被包装成离线成功。
 
-`GET /health/opentrek` 是不含密钥的本地配置检查，只返回 `mode`、`configured`、`agentVersion` 和配置状态；`ready` 不代表网关或 RAG 已经通过运行检查。2026-08-19 当前版本曾成功完成在线 Session 与普通/周期问答，之后平台又出现 Session 数据库只读事务和 `run` 无消息。2026-08-20 的六次全新探测曾返回 `mode=offline`。2026-08-22 早先一次实测创建了在线 Session，并发送周期问题，路由为 `cycle_question`、回复非空，但 metadata 未包含 `ragUsed=true`，来源为空，因此前端保持“OpenTrek 在线 · 未确认使用 RAG”；本轮最新探测在创建 Session 时于 10 秒超时，`auto` 模式诚实降级为离线。这证明当前链路不稳定，也不证明当前发布基线已经完成知识库检索或来源回传。
+`GET /health/opentrek` 是不含密钥的本地配置检查，只返回 `mode`、`configured`、`agentVersion` 和配置状态；`ready` 不代表网关或 RAG 已经通过运行检查。2026-08-19 当前版本曾成功完成在线 Session 与普通/周期问答，之后平台又出现 Session 数据库只读事务和 `run` 无消息。2026-08-20 的六次全新探测曾返回 `mode=offline`。2026-08-22 一次实测创建了在线 Session，并发送周期问题，路由为 `cycle_question`、回复非空，但 metadata 未包含 `ragUsed=true`，来源为空；当日最后一次探测则在创建 Session 时于 10 秒超时并诚实降级。2026-08-25 已重新成功创建在线 Session 并得到非空任务回复，结果为 `mode=online`、`intent=task_difficulty`，说明普通问答链路当前可用；但 `ragUsed` 仍缺失或为空且来源为 0 条，因此前端保持“OpenTrek 在线 · 未确认使用 RAG”，当前发布基线仍没有知识库检索或来源回传的合格证据。
 
 ### 11.2 OpenTrek 规格包
 
@@ -544,16 +545,16 @@ RAG 只属于任务、周期和情绪的检索分支；工具、小聊和危机�
 
 ## 14. 已验证状态与已知边界
 
-截至 2026-08-22（本轮代码与文档调整后）：
+截至 2026-08-25（本轮代码与文档调整后）：
 
-- 后端 Vitest 普通模式：19 个文件通过、1 个文件按环境跳过，261 个测试通过、4 个测试跳过（4 个均来自数据库测试文件；共 265 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，20 个文件、265 个测试全部通过。前端 Vitest：15 个测试文件、78 个测试全部通过。
-- 后端 `npm run check`、`npm run build`，前端 `npm run lint`、`npm run build` 均通过；前后端 `npm audit` 均报告 0 个已知漏洞。
+- 后端沿用 2026-08-22 的完整验证结果：Vitest 普通模式 19 个文件通过、1 个文件按环境跳过，261 个测试通过、4 个测试跳过（4 个均来自数据库测试文件；共 265 个测试）；设置 `RUN_AUTH_DB_TESTS=true` 后，20 个文件、265 个测试全部通过。
+- 2026-08-25 前端 Vitest：16 个测试文件、81 个测试全部通过；`npm run lint`、`npm run build` 均通过，`npm audit` 报告 0 个已知漏洞。
 - 全新临时 PostgreSQL 数据库的 001–005 迁移全部成功；已有数据库若校验和不一致会被保护性停止，不自动修复。
 - 本机离线 HTTP 冒烟测试实际通过健康检查、数据库、周期计算、Session 创建和任务问答；任务回复明确为 `ragUsed=false`、`sources=[]`。
 - 离线 Session 创建、普通问答、危机优先、动作确认、记忆闭环、跨账号 Session 拒绝、账号导出与删号已完成自动化或真实 HTTP/数据库验证。
 - OpenTrek 路由/安全离线校验：12 条路由、2 条危机、5 条安全样例，状态 `valid`；来源校验状态 `valid_but_not_ready`，Q01–Q10 均等待真实 Trace/sourceId。
 - 危机安全评估会拒绝否定或劝阻紧急渠道、可信任联系人支持的回答，包括在“不建议”后带“你/您”的表达，不以关键词共现代替正向求助建议。
-- OpenTrek 2026-08-22 早先实测曾成功创建在线 Session 并命中 `cycle_question`，但 `ragUsed` 未返回且来源为空；本轮最新应用探测约 11 秒后得到明确的离线 Session，后续周期问题返回 `intent=cycle_question`、`ragUsed=false` 和 0 条来源。`/health/opentrek` 的 `ready` 只表示本机四项配置齐全，不表示 VPN/网关已应答。当前仍不能确认远端知识库或 RAG 来源可用。
+- OpenTrek 2026-08-25 实测成功创建在线 Session 并得到任务回复，结果为 `mode=online`、`intent=task_difficulty`，但 `ragUsed` 仍缺失或为空且来源为 0 条。`/health/opentrek` 的 `ready` 只表示本机四项配置齐全，不表示 VPN/网关已应答；在线非空回复也只证明普通问答链路可用。当前仍不能确认远端知识库或 RAG 来源可用。
 - `ragUsed`/`sources` JSON Schema 回归测试和两项离线 OpenTrek 数据校验均通过；来源集合仍是 `valid_but_not_ready`，这些命令未联网。
 - 内置浏览器插件最终返回空实例列表，因此本次没有完成真实点击、桌面/移动截图或视觉重叠验收。
 
