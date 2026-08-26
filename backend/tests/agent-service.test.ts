@@ -209,6 +209,78 @@ describe("agent service OpenTrek degradation boundary", () => {
     expect(openTrek.runAgent).toHaveBeenCalledWith(runInput, memories);
   });
 
+  it("uses a stateless action-free fallback when a generic online emotion reply fails the quality gate", async () => {
+    openTrek.runAgent.mockResolvedValueOnce({
+      sessionCode: runInput.sessionCode,
+      content: "如果愿意，可以试试戴上耳塞或播放白噪音。",
+      metadata: {
+        mode: "online",
+        intent: "emotion_support",
+        strategy: "none",
+        ragUsed: true,
+        sources: [{ sourceId: "emotion-doc", title: "情绪支持资料" }],
+      },
+    });
+    const { runAgent } = await loadService("auto");
+
+    const reply = await runAgent({
+      ...runInput,
+      message: "我很焦虑，脑子停不下来",
+    });
+
+    expect(reply.sessionCode).toMatch(/^offline:/);
+    expect(reply.content).not.toContain("白噪音");
+    expect(reply.metadata).toMatchObject({
+      mode: "offline",
+      intent: "emotion_support",
+      strategy: "none",
+      ragUsed: false,
+      sources: [],
+      notice: expect.any(String),
+    });
+    expect(reply.metadata.action).toBeUndefined();
+
+    const followup = await runAgent({
+      ...runInput,
+      sessionCode: reply.sessionCode,
+      message: "好",
+      dailyCheckin: {
+        date: "2026-08-26",
+        energy: 3,
+        mood: "anxious",
+        bodyState: [],
+        shareWithChat: true,
+      },
+    });
+
+    expect(followup.metadata.action).not.toBe("open_breathing");
+    expect(followup.metadata.action).not.toBe("offer_breathing");
+  });
+
+  it("fails closed in online mode when an emotion reply violates the quality gate", async () => {
+    openTrek.runAgent.mockResolvedValueOnce({
+      sessionCode: runInput.sessionCode,
+      content: "如果愿意，可以试试4-7-8呼吸练习。",
+      metadata: {
+        mode: "online",
+        intent: "emotion_support",
+        strategy: "none",
+        ragUsed: true,
+        sources: [{ sourceId: "emotion-doc", title: "情绪支持资料" }],
+      },
+    });
+    const { runAgent } = await loadService("online");
+
+    await expect(runAgent({
+      ...runInput,
+      message: "我很焦虑",
+    })).rejects.toMatchObject({
+      name: "OpenTrekError",
+      status: 200,
+      code: "E_BREATHING_GUIDANCE",
+    });
+  });
+
   it.each(["auto", "online"] as const)(
     "labels a successful %s session as online",
     async (mode) => {

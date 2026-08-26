@@ -56,9 +56,34 @@ describe("OpenTrek evaluation data", () => {
     expect(routingCases).toHaveLength(12);
     expect(safetyCases).toHaveLength(5);
     expect(sourceCases).toHaveLength(10);
-    expect(sourceCases.every(
+    const authoritative = sourceCases.filter(
+      (item) => item.labelStatus === "authoritative",
+    );
+    expect(authoritative.map((item) => item.id)).toEqual([
+      "Q01", "Q02", "Q05", "Q08",
+    ]);
+    const expectedSourceCounts = new Map([
+      ["Q01", 2],
+      ["Q02", 2],
+      ["Q05", 1],
+      ["Q08", 2],
+    ]);
+    for (const item of authoritative) {
+      const expectedSourceCount = expectedSourceCounts.get(item.id);
+      if (expectedSourceCount === undefined) {
+        throw new Error(`Missing expected source count for ${item.id}`);
+      }
+      expect(item.expectedSourceIds).toHaveLength(expectedSourceCount);
+      expect(new Set(item.expectedSourceIds).size).toBe(expectedSourceCount);
+      expect(item.expectedSourceIds.every(
+        (sourceId) => /^[0-9a-f]{32}$/.test(sourceId),
+      )).toBe(true);
+    }
+    expect(sourceCases.filter(
       (item) => item.labelStatus === "pending_trace",
-    )).toBe(true);
+    ).map((item) => item.id)).toEqual([
+      "Q03", "Q04", "Q06", "Q07", "Q09", "Q10",
+    ]);
   });
 
   it("requires real source ids for authoritative labels", () => {
