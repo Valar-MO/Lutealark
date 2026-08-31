@@ -67,6 +67,17 @@ import {
 const BUSINESS_TIME_ZONE = 'Asia/Shanghai'
 
 type ToolTarget = 'plan' | 'focus' | 'environment' | 'movement' | null
+type ToolPanel = 'plan' | 'focus' | 'environment' | 'sensory' | 'movement'
+
+function expandedPanelsForTarget(target: ToolTarget): Record<ToolPanel, boolean> {
+  return {
+    plan: target === 'plan',
+    focus: target === 'focus',
+    environment: target === 'environment',
+    sensory: target === 'environment',
+    movement: target === 'movement',
+  }
+}
 
 export function ToolsPage({
   target,
@@ -89,6 +100,7 @@ export function ToolsPage({
   const [focusDuration, setFocusDuration] = useState<FocusDurationMinutes>(() => (
     loadFocusDuration(subject, today) ?? recommendFocusDuration(suggestedEnergy, isBufferMode)
   ))
+  const [expandedPanels, setExpandedPanels] = useState<Record<ToolPanel, boolean>>(() => expandedPanelsForTarget(target))
   const syncVersionRef = useRef(0)
   const planSyncQueueRef = useRef<Promise<void>>(Promise.resolve())
   const activityFlushRef = useRef<Promise<void> | null>(null)
@@ -107,6 +119,7 @@ export function ToolsPage({
   }, [subjectKey, today])
 
   useEffect(() => {
+    if (target) setExpandedPanels(expandedPanelsForTarget(target))
     const element = target ? document.getElementById(`tool-${target}`) : null
     if (!element) return
     const frame = window.requestAnimationFrame(() => {
@@ -115,6 +128,10 @@ export function ToolsPage({
     })
     return () => window.cancelAnimationFrame(frame)
   }, [target])
+
+  const setPanelExpanded = (panel: ToolPanel, expanded: boolean) => {
+    setExpandedPanels((current) => ({ ...current, [panel]: expanded }))
+  }
 
   useEffect(() => {
     let active = true
@@ -201,6 +218,7 @@ export function ToolsPage({
   }
 
   const recommendedDuration = recommendFocusDuration(manualEnergy, isBufferMode)
+  const focusSpotlight = target === 'focus'
   const adjustEnergy = (value: number) => {
     const nextEnergy = Math.max(1, Math.min(5, Math.round(value)))
     setManualEnergy(nextEnergy)
@@ -209,6 +227,26 @@ export function ToolsPage({
     setFocusDuration(nextDuration)
     persistFocusDuration(subject, today, nextDuration)
   }
+  const focusTimer = (spotlight = false) => (
+    <FocusTimer
+      key={`focus-${focusDuration}`}
+      spotlight={spotlight}
+      initialDurationMinutes={focusDuration}
+      expanded={expandedPanels.focus}
+      onExpandedChange={(expanded) => setPanelExpanded('focus', expanded)}
+      onDurationChange={(minutes) => {
+        setFocusDuration(minutes)
+        persistFocusDuration(subject, today, minutes)
+      }}
+      onComplete={(completion) => void saveActivity({
+        id: completion.id,
+        type: 'pomodoro',
+        completedAt: completion.completedAt,
+        durationSeconds: completion.durationMinutes * 60,
+        metadata: { durationMinutes: completion.durationMinutes, recommendedDuration },
+      })}
+    />
+  )
 
   return (
     <section className="soft-grid scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-5 md:px-8">
@@ -239,36 +277,22 @@ export function ToolsPage({
 
         {activityNotice && <p className="mb-4 rounded-2xl border border-[#d8dfd2] bg-white/75 px-4 py-3 text-sm text-[#5a6754]" role="status">{activityNotice}</p>}
 
-        <div className="grid items-start gap-5 lg:grid-cols-2">
+        <div className="space-y-4">
           <div id="tool-plan" tabIndex={-1} className="scroll-mt-4 outline-none">
-            <TodayGentlePlan items={planItems} onChange={changePlan} />
+            <TodayGentlePlan items={planItems} onChange={changePlan} expanded={expandedPanels.plan} onExpandedChange={(expanded) => setPanelExpanded('plan', expanded)} />
           </div>
           <div id="tool-focus" tabIndex={-1} className="scroll-mt-4 outline-none">
-            <FocusTimer
-              key={`focus-${focusDuration}`}
-              initialDurationMinutes={focusDuration}
-              onDurationChange={(minutes) => {
-                setFocusDuration(minutes)
-                persistFocusDuration(subject, today, minutes)
-              }}
-              onComplete={(completion) => void saveActivity({
-                id: completion.id,
-                type: 'pomodoro',
-                completedAt: completion.completedAt,
-                durationSeconds: completion.durationMinutes * 60,
-                metadata: { durationMinutes: completion.durationMinutes, recommendedDuration },
-              })}
-            />
+            {focusTimer(focusSpotlight)}
           </div>
-          <div id="tool-environment" tabIndex={-1} className="scroll-mt-4 space-y-5 outline-none">
-            <EnvironmentTuner onApply={(application) => void saveActivity({
+          <div id="tool-environment" tabIndex={-1} className="scroll-mt-4 space-y-4 outline-none">
+            <EnvironmentTuner expanded={expandedPanels.environment} onExpandedChange={(expanded) => setPanelExpanded('environment', expanded)} onApply={(application) => void saveActivity({
               id: application.id,
               type: 'environment',
               completedAt: application.appliedAt,
               note: application.suggestion,
               metadata: { kind: 'environment', sceneId: application.sceneId },
             })} />
-            <SensoryLoadReducer onApply={(application) => void saveActivity({
+            <SensoryLoadReducer expanded={expandedPanels.sensory} onExpandedChange={(expanded) => setPanelExpanded('sensory', expanded)} onApply={(application) => void saveActivity({
               id: application.id,
               type: 'environment',
               completedAt: application.appliedAt,
@@ -277,7 +301,7 @@ export function ToolsPage({
             })} />
           </div>
           <div id="tool-movement" tabIndex={-1} className="scroll-mt-4 outline-none">
-            <MicroMovementTool onComplete={(completion) => void saveActivity({
+            <MicroMovementTool expanded={expandedPanels.movement} onExpandedChange={(expanded) => setPanelExpanded('movement', expanded)} onComplete={(completion) => void saveActivity({
               id: completion.id,
               type: 'micro_movement',
               completedAt: completion.completedAt,

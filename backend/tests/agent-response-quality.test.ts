@@ -47,20 +47,25 @@ describe("generic emotional-support response quality", () => {
     });
   });
 
-  it.each([
-    ["missing", { strategy: undefined }],
-    ["specialized", { strategy: "breathing", action: "offer_breathing" }],
-  ])("fails closed for a %s emotional-support strategy until its validator exists", (
-    _name,
-    metadata,
-  ) => {
+  it("fails closed for a missing emotional-support strategy", () => {
     expect(evaluateAgentResponseQuality(response(
       "要不要先试一次温和呼吸练习？",
-      metadata,
+      { strategy: undefined },
     ))).toEqual({
       ok: false,
       reasons: ["E_UNSUPPORTED_STRATEGY"],
     });
+  });
+
+  it.each([
+    ["breathing", { strategy: "breathing", action: "offer_breathing" }],
+    ["environment", { strategy: "environment", action: "show_environment_reset" }],
+    ["micro movement", { strategy: "micro_movement", action: "show_micro_movement" }],
+  ])("does not apply the P03 gate to the %s strategy", (_name, metadata) => {
+    expect(evaluateAgentResponseQuality(response(
+      "要不要先试一次温和呼吸练习？",
+      metadata,
+    ))).toEqual({ ok: true, reasons: [] });
   });
 
   it("does not apply the emotional-support gate to another intent", () => {

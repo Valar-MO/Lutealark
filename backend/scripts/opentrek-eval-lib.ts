@@ -25,6 +25,7 @@ export const agentActionSchema = z.enum([
   "open_breathing",
   "offer_focus_timer",
   "open_focus_timer",
+  "offer_light_plan",
   "open_light_plan",
   "open_cycle",
   "show_environment_reset",

@@ -33,7 +33,9 @@ describe('Word checklist UI contracts', () => {
     expect(labelForAction('offer_breathing')).toBeNull()
     expect(labelForAction('offer_focus_timer')).toBeNull()
     expect(labelForAction('offer_daily_checkin')).toBeNull()
+    expect(labelForAction('offer_light_plan')).toBeNull()
     openAction('offer_breathing', openView)
+    openAction('offer_light_plan', openView)
     expect(openView).not.toHaveBeenCalled()
 
     expect(labelForAction('open_breathing')).toBe('开始呼吸训练')

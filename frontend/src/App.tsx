@@ -16,6 +16,7 @@ import { BreathingPage } from './features/breathing'
 import { CycleDesignPanel } from './features/cycle-design'
 import { AgentEntryCard, ChatExperience } from './features/chat-ui'
 import { AccountPage, MemoryPage, PointsPage, ToolsPage } from './features/product-pages'
+import { FloatingFocusTimer } from './features/floating-focus-timer'
 import {
   addBreathingRecord,
   clearBreathingRecordsCache,
@@ -1049,6 +1050,7 @@ function App() {
             <AccountPage />
           )}
           {activeView !== 'agent' && <MobileNav view={activeView} openView={openView} />}
+          <FloatingFocusTimer />
         </main>
       </div>
     </div>

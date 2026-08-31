@@ -9,7 +9,7 @@
     "schemaVersion": { "const": "1" },
     "workflowVersion": { "type": "string", "minLength": 1, "maxLength": 100 },
     "intent": {
-      "enum": ["task_difficulty", "cycle_question", "emotion_support", "daily_checkin", "memory_request", "safety_crisis", "smalltalk"]
+      "enum": ["task_difficulty", "cycle_question", "emotion_support", "environment_support", "daily_checkin", "memory_request", "safety_crisis", "smalltalk"]
     },
     "strategy": {
       "enum": ["none", "task_breakdown", "pomodoro", "environment", "micro_movement", "breathing"]
@@ -18,7 +18,7 @@
     "action": {
       "enum": [
         "offer_breathing", "open_breathing", "offer_focus_timer",
-        "open_focus_timer", "open_light_plan", "open_cycle",
+        "open_focus_timer", "offer_light_plan", "open_light_plan", "open_cycle",
         "show_environment_reset", "show_micro_movement",
         "offer_daily_checkin", "open_daily_checkin"
       ]

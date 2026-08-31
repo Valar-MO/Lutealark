@@ -438,7 +438,6 @@ function ChatMessageBubble({ message, isBufferMode, onAction, onSources, onMemor
 
   const sources = message.mode === 'offline' ? [] : (message.sources ?? []).slice(0, 3)
   const verifiedRag = message.mode === 'online' && message.ragUsed === true && sources.length > 0
-  const sections = buildSections(message.content)
   const emotional = emotionalPattern.test(message.content)
   const actionLabel = message.action ? labelForAction(message.action) : null
   const decideMemory = async (decision: 'save' | 'dismiss') => {
@@ -457,12 +456,9 @@ function ChatMessageBubble({ message, isBufferMode, onAction, onSources, onMemor
         {message.mode === 'offline' && <div className="chat-offline-badge">● 离线基础支持 · 未使用 OpenTrek/RAG</div>}
         {message.mode === 'online' && <div className="chat-online-badge">● OpenTrek 在线 · {verifiedRag ? '已使用 RAG' : '未确认使用 RAG'}</div>}
         <div className={`chat-agent-bubble ${isBufferMode ? 'is-buffer' : ''}`}>
-          {sections.map((section, index) => (
-            <div key={`${section.label}-${index}`} className={`chat-agent-section section-${index + 1} ${emotional && index === 0 ? 'is-emotional' : ''}`}>
-              <span className="chat-section-label">{section.label}</span>
-              <p>{renderPermissionText(section.text)}</p>
-            </div>
-          ))}
+          <div className={`chat-agent-content ${emotional ? 'is-emotional' : ''}`}>
+            <p>{renderPermissionText(message.content.trim() || '我听见了。我们可以从最轻的一步开始。')}</p>
+          </div>
           {sources.length > 0 && <button type="button" className="chat-source-link" onClick={() => onSources(sources)}>参考来源 · {sources.length}</button>}
         </div>
         {message.memoryCandidate && <MemoryCandidateCard message={message} consent={memoryConsent} busy={memoryBusy} error={memoryError} setConsent={setMemoryConsent} decide={decideMemory} />}
@@ -493,19 +489,6 @@ function SourceSheet({ sources, onClose }: { sources: KnowledgeSource[]; onClose
 
 function SafetySheet({ onClose }: { onClose: () => void }) {
   return <div className="chat-sheet-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="chat-safety-sheet" role="dialog" aria-modal="true" aria-labelledby="safety-sheet-title"><div className="chat-sheet-handle" /><div className="flex items-start justify-between gap-3"><div><h2 id="safety-sheet-title">你现在并不孤单</h2><p>如果此刻有立即危险，请先把危险物品放远，并联系一个可信任的人陪伴。</p></div><button type="button" className="chat-sheet-close" onClick={onClose} aria-label="关闭">×</button></div><div className="chat-safety-actions"><a href="tel:120">拨打 120</a><a href="tel:110">拨打 110</a></div><p className="chat-safety-footnote">也可以直接前往最近的急诊。Lutealark 不能替代紧急救援或专业医疗帮助。</p><button type="button" className="chat-source-close-button" onClick={onClose}>继续对话</button></section></div>
-}
-
-function buildSections(content: string) {
-  const labels = ['情绪确认', '医学解释', '缓冲建议', '环境微调', '下一步邀请']
-  const chunks = content.split(/\n{2,}|\n(?=\d+[、.)])|(?<=[。！？!?])\s*/).map((chunk) => chunk.trim()).filter(Boolean)
-  if (chunks.length <= 1) return [{ label: labels[0], text: content.trim() || '我听见了。我们可以从最轻的一步开始。' }]
-  const result: Array<{ label: string; text: string }> = []
-  const size = Math.ceil(chunks.length / labels.length)
-  labels.forEach((label, index) => {
-    const text = chunks.slice(index * size, (index + 1) * size).join(' ')
-    if (text) result.push({ label, text })
-  })
-  return result
 }
 
 function renderPermissionText(text: string) {

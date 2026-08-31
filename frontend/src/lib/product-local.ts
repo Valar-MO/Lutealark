@@ -8,6 +8,7 @@ import {
 } from './data-subject'
 import {
   createToolId,
+  isFocusDurationMinutes,
   normalizeGentlePlan,
   type FocusDurationMinutes,
   type GentlePlanItem,
@@ -156,7 +157,7 @@ export function loadFocusDuration(subject: DataSubject, date: string): FocusDura
   try {
     const parsed = JSON.parse(getLocalStorage()?.getItem(scopedStorageKey(SCOPED_FOCUS_DURATION_STORAGE_KEY, subject, date)) ?? 'null') as { minutes?: unknown } | null
     const value = parsed?.minutes
-    return value === 5 || value === 10 || value === 15 || value === 25 ? value : null
+    return isFocusDurationMinutes(value) ? value : null
   } catch {
     return null
   }

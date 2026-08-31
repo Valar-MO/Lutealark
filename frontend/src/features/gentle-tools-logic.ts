@@ -1,8 +1,10 @@
 export const MAX_GENTLE_PLAN_ITEMS = 3
 export const MAX_GENTLE_PLAN_TEXT_LENGTH = 80
 export const FOCUS_DURATIONS = [5, 10, 15, 25] as const
+export const MIN_FOCUS_DURATION_MINUTES = 1
+export const MAX_FOCUS_DURATION_MINUTES = 90
 
-export type FocusDurationMinutes = typeof FOCUS_DURATIONS[number]
+export type FocusDurationMinutes = number
 export type CountdownStatus = 'idle' | 'running' | 'paused' | 'completed'
 
 export type GentlePlanItem = {
@@ -15,6 +17,17 @@ export type FocusSessionCompletion = {
   id: string
   durationMinutes: FocusDurationMinutes
   completedAt: string
+}
+
+export function isFocusDurationMinutes(value: unknown): value is FocusDurationMinutes {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= MIN_FOCUS_DURATION_MINUTES
+    && value <= MAX_FOCUS_DURATION_MINUTES
+}
+
+export function isPresetFocusDuration(value: number) {
+  return FOCUS_DURATIONS.some((minutes) => minutes === value)
 }
 
 export type EnvironmentSceneId = 'start' | 'low-energy' | 'busy' | 'wind-down'

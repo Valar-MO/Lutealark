@@ -38,9 +38,21 @@ export function evaluateAgentResponseQuality(
   if (response.metadata.intent !== "emotion_support") {
     return { ok: true, reasons: [] };
   }
-  // Specialized emotional-support strategies need their own action/consent
-  // validators. Until those exist, only the generic P03 contract is trusted.
-  if (response.metadata.strategy !== "none") {
+  const strategy = response.metadata.strategy;
+
+  // This gate is the P03 (generic emotional support) contract. P05/P07 have
+  // different action and consent semantics, so applying P03's action-free
+  // rules to them would reject valid breathing/environment/movement replies.
+  // Keep unknown or missing strategies fail-closed rather than silently
+  // treating malformed upstream metadata as a specialized route.
+  if (
+    strategy === "breathing"
+    || strategy === "environment"
+    || strategy === "micro_movement"
+  ) {
+    return { ok: true, reasons: [] };
+  }
+  if (strategy !== "none") {
     return { ok: false, reasons: ["E_UNSUPPORTED_STRATEGY"] };
   }
 

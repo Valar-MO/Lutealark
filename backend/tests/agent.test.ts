@@ -529,6 +529,37 @@ describe("OpenTrek agent client", () => {
     });
   });
 
+  it("keeps the non-RAG environment-support intent returned by the workflow", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "environment_support",
+      ragUsed: false,
+      sources: [],
+      action: "none",
+    })).toEqual({
+      intent: "environment_support",
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
+  it("keeps the light-plan invitation marker without turning it into a navigation action", async () => {
+    const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
+
+    expect(normalizeAgentMetadata({
+      intent: "task_difficulty",
+      action: "offer_light_plan",
+      ragUsed: false,
+      sources: [],
+    })).toEqual({
+      intent: "task_difficulty",
+      action: "offer_light_plan",
+      ragUsed: false,
+      sources: [],
+    });
+  });
+
   it("does not accept malformed workflow version metadata", async () => {
     const { normalizeAgentMetadata } = await import("../src/clients/opentrek.js");
 

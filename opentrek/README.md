@@ -10,6 +10,11 @@ local frontend integration but has not passed the complete RAG release gate.
 Prompts use OpenTrek task-variable syntax (`${name}`). JSON schemas define the
 boundary between the backend, workflow and frontend.
 
+The action vocabulary includes `offer_light_plan` for a light-plan invitation.
+It is an offer-state marker only: the frontend deliberately shows no navigation
+button for it. After explicit confirmation, the workflow must return
+`open_light_plan`.
+
 The repository template defaults to `OPENTREK_MODE=offline`, so a new clone can
 verify PostgreSQL, backend and frontend without the private network. Maintainer
 online testing uses `auto` with Agent version `1787669843649`: it tries
@@ -148,18 +153,16 @@ the user to stop. This fixes the breathing-consent and action-semantics defect.
 However, the suggestion still says to wear earplugs or play white noise, which
 encodes two alternatives and therefore still fails the strict one-atomic-action
 quality gate. Do not keep stacking prompt constraints for this failure mode.
-The backend now applies a deterministic fail-closed gate to online emotion
-results. It currently trusts only an explicit `emotion_support + strategy=none`
-generic path and rejects action-bearing, breathing, multiple-suggestion,
-alternative and multi-step response shapes. A missing, invalid or specialized
-emotion strategy without its own validator is also rejected, so malformed
-metadata cannot bypass the gate. In `auto` mode
-a rejected response becomes a dedicated action-free offline fallback; in
-`online` mode it fails explicitly instead of delivering the invalid online
-body. The dedicated fallback does not create a pending breathing action, so a
-later bare confirmation cannot open or re-offer breathing because of the
-rejected online text. Use this gate
-while correcting and rerunning Q08–Q10. A zero-retrieval `ragUsed=false`
+The backend retains the deterministic generic-emotion quality evaluator for
+offline tests and P03 Prompt tuning. It checks an explicit
+`emotion_support + strategy=none` P03 shape for action-bearing, breathing,
+multiple-suggestion, alternative and multi-step response patterns; P05/P07
+specialized strategies are outside that evaluator. It is not a real-time
+delivery gate: a non-empty successful OpenTrek result is returned unchanged in
+both `online` and `auto` modes. `auto` falls back only for connectivity,
+timeout, gateway or invalid-content failures. The platform, rather than a
+runtime rewrite, remains responsible for ensuring that a P03 reply cannot
+bypass the breathing-consent action semantics. A zero-retrieval `ragUsed=false`
 fallback is still required. The general response branch correctly has no
 retrieval. Implement the emotion
 pending-action state and strategy-specific validator separately so
@@ -381,6 +384,13 @@ Attachments are not a product feature in the current local web build. The
 backend rejects non-empty attachment arrays instead of forwarding unvalidated
 provider objects. Upstream trace fields, signed URLs, arbitrary metadata and
 raw error text are not returned to the browser.
+
+The candidate image-environment path returns `intent=environment_support`,
+`ragUsed=false` and `sources=[]`. The workflow metadata schema and backend
+allowlist recognize that intent. This does not make browser upload available:
+production attachment forwarding must use the platform's documented upload
+and attachment-reference contract, never locally manufactured Blob/data URLs
+or arbitrary external URLs.
 
 Never add an APP_KEY, internal signed source URL or real user conversation to
 this directory.

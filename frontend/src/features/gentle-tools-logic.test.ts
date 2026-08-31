@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addGentlePlanItem,
   formatCountdown,
+  isFocusDurationMinutes,
   normalizeGentlePlan,
   toggleGentlePlanItem,
 } from './gentle-tools-logic'
@@ -37,5 +38,14 @@ describe('gentle tool logic', () => {
   it('formats a safe countdown', () => {
     expect(formatCountdown(65)).toBe('01:05')
     expect(formatCountdown(-4)).toBe('00:00')
+  })
+
+  it('accepts a whole-minute custom focus duration only within the supported range', () => {
+    expect(isFocusDurationMinutes(1)).toBe(true)
+    expect(isFocusDurationMinutes(47)).toBe(true)
+    expect(isFocusDurationMinutes(90)).toBe(true)
+    expect(isFocusDurationMinutes(0)).toBe(false)
+    expect(isFocusDurationMinutes(91)).toBe(false)
+    expect(isFocusDurationMinutes(7.5)).toBe(false)
   })
 })
