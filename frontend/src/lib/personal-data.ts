@@ -1,5 +1,5 @@
 import type { BreathingRecord } from '../features/breathing-storage'
-import { ApiRequestError, requestJson, type CycleSettings, type DailyCheckIn } from './api'
+import { ApiRequestError, requestJson, type CycleEventRecord, type CycleEventSaveResult, type CycleSettings, type DailyCheckIn } from './api'
 import {
   dataSubjectKey,
   getActiveDataSubject,
@@ -65,6 +65,16 @@ export async function syncCycleSettings(
     updatePending(subject, (pending) => ({ ...pending, cycle: false }))
   }
   return result
+}
+
+export async function recordCycleEvent(
+  event: CycleEventRecord,
+  subject: DataSubject = getActiveDataSubject(),
+): Promise<CycleEventSaveResult> {
+  const syncKey = scopedMutationKey(subject, `cycle-event:${event.date}`)
+  return runMutation(syncKey, () => (
+    personalDataRequest<CycleEventSaveResult>('/api/personal-data/cycle-event', event, subject)
+  ))
 }
 
 export async function syncDailyCheckin(

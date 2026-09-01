@@ -9,6 +9,18 @@ export type CycleSettings = {
   cycleLength: number
 }
 
+export type CycleEventType = 'period_start' | 'period_end' | 'no_symptom'
+
+export type CycleEvent = {
+  date: ISODate
+  type: CycleEventType
+}
+
+export type CycleEventMutationResult = {
+  event: CycleEvent
+  cycleSettings: CycleSettings | null
+}
+
 export type CycleResult = {
   currentPhase:
     | 'menstruation'
@@ -171,6 +183,7 @@ export type PointsSummary = {
 
 export type PersonalDataSnapshot = {
   cycleSettings: CycleSettings | null
+  cycleEvents: CycleEvent[]
   dailyCheckins: DailyCheckin[]
   breathingRecords: BreathingRecord[]
 }

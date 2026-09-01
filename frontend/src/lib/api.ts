@@ -3,6 +3,8 @@ import type {
   CreateAgentSessionResponse,
   CycleResult as SharedCycleResult,
   CycleSettings as SharedCycleSettings,
+  CycleEvent,
+  CycleEventMutationResult,
   DailyCheckin,
 } from '@lutealark/contracts'
 import { getOrCreateDeviceId } from './data-subject'
@@ -25,6 +27,8 @@ export class ApiRequestError extends Error {
 export type CycleSettings = SharedCycleSettings
 export type CycleResult = SharedCycleResult
 export type DailyCheckIn = DailyCheckin
+export type CycleEventRecord = CycleEvent
+export type CycleEventSaveResult = CycleEventMutationResult
 
 const SESSION_TIMEOUT_MS = 20_000
 const CHAT_TIMEOUT_MS = 130_000

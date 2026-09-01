@@ -437,7 +437,6 @@ function ChatMessageBubble({ message, isBufferMode, onAction, onSources, onMemor
   }
 
   const sources = message.mode === 'offline' ? [] : (message.sources ?? []).slice(0, 3)
-  const verifiedRag = message.mode === 'online' && message.ragUsed === true && sources.length > 0
   const emotional = emotionalPattern.test(message.content)
   const actionLabel = message.action ? labelForAction(message.action) : null
   const decideMemory = async (decision: 'save' | 'dismiss') => {
@@ -454,7 +453,6 @@ function ChatMessageBubble({ message, isBufferMode, onAction, onSources, onMemor
           <div className="chat-agent-avatar" aria-hidden="true"><img src="/assets/lutealark-bird.png" alt="" /></div>
       <div className="min-w-0 max-w-[min(88%,640px)]">
         {message.mode === 'offline' && <div className="chat-offline-badge">● 离线基础支持 · 未使用 OpenTrek/RAG</div>}
-        {message.mode === 'online' && <div className="chat-online-badge">● OpenTrek 在线 · {verifiedRag ? '已使用 RAG' : '未确认使用 RAG'}</div>}
         <div className={`chat-agent-bubble ${isBufferMode ? 'is-buffer' : ''}`}>
           <div className={`chat-agent-content ${emotional ? 'is-emotional' : ''}`}>
             <p>{renderPermissionText(message.content.trim() || '我听见了。我们可以从最轻的一步开始。')}</p>

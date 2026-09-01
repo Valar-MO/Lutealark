@@ -21,6 +21,7 @@ import {
 } from "./contracts/memory.js";
 import {
   breathingRecordSchema,
+  cycleEventSchema,
   personalDataUserIdSchema,
 } from "./contracts/personal-data.js";
 import {
@@ -251,6 +252,18 @@ export function createApp(
     );
     calculateCycle(input);
     return c.json(await personalDataRepository.upsertCycleSettings(userId, input));
+  });
+
+  app.put("/api/personal-data/cycle-event", async (c) => {
+    const userId = (await resolveAuthenticatedUser(
+      c.req.raw,
+      authenticationService,
+    )).userId;
+    const input = cycleEventSchema.parse(
+      await c.req.json().catch(() => undefined),
+    );
+    dateOnlyTimestamp(input.date);
+    return c.json(await personalDataRepository.recordCycleEvent(userId, input));
   });
 
   app.put("/api/personal-data/checkin", async (c) => {

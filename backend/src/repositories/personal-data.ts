@@ -3,6 +3,8 @@ import type { DailyCheckin } from "../contracts/agent.js";
 import type { CycleSettings } from "../contracts/cycle.js";
 import type {
   BreathingRecord,
+  CycleEvent,
+  CycleEventMutationResult,
   PersonalDataSnapshot,
   PersonalDataUserId,
 } from "../contracts/personal-data.js";
@@ -21,6 +23,10 @@ export interface PersonalDataRepository {
     userId: PersonalDataUserId,
     settings: CycleSettings,
   ): Promise<CycleSettings>;
+  recordCycleEvent(
+    userId: PersonalDataUserId,
+    event: CycleEvent,
+  ): Promise<CycleEventMutationResult>;
   upsertDailyCheckin(
     userId: PersonalDataUserId,
     checkin: DailyCheckin,
@@ -41,6 +47,7 @@ export interface PersonalDataRepository {
 }
 
 type CycleRow = { lastPeriodDate: string; cycleLength: number };
+type CycleEventRow = CycleEvent;
 type CheckinRow = {
   date: string;
   energy: number;
@@ -105,6 +112,14 @@ export const postgresPersonalDataRepository: PersonalDataRepository = {
          LIMIT $2`,
           [userId, PERSONAL_DATA_WINDOW_SIZE],
         );
+        const cycleEvents = await client.query<CycleEventRow>(
+          `SELECT event_date::text AS date, event_type AS type
+           FROM cycle_events
+           WHERE user_id = $1
+           ORDER BY event_date DESC
+           LIMIT $2`,
+          [userId, PERSONAL_DATA_WINDOW_SIZE],
+        );
         const breathing = await client.query<BreathingRow>(
           `SELECT id,
                 mode_id AS "modeId",
@@ -121,6 +136,7 @@ export const postgresPersonalDataRepository: PersonalDataRepository = {
 
         const snapshot = {
           cycleSettings: cycle.rows[0] ?? null,
+          cycleEvents: cycleEvents.rows,
           dailyCheckins: checkins.rows.map((row) => ({
             date: row.date,
             energy: row.energy as DailyCheckin["energy"],
@@ -158,6 +174,50 @@ export const postgresPersonalDataRepository: PersonalDataRepository = {
         [userId, settings.lastPeriodDate, settings.cycleLength],
       );
       return settings;
+    });
+  },
+
+  async recordCycleEvent(userId, event) {
+    if (event.date > businessDateOnly()) {
+      throw new DateInputError("记录日期不能晚于今天");
+    }
+    return inUserTransaction(userId, async (client) => {
+      await client.query(
+        `INSERT INTO cycle_events (user_id, event_date, event_type)
+         VALUES ($1, $2::date, $3)
+         ON CONFLICT (user_id, event_date) DO UPDATE SET
+           event_type = EXCLUDED.event_type,
+           updated_at = now()`,
+        [userId, event.date, event.type],
+      );
+
+      if (event.type === "period_start") {
+        const latestStart = await client.query<{ date: string }>(
+          `SELECT event_date::text AS date
+           FROM cycle_events
+           WHERE user_id = $1 AND event_type = 'period_start'
+           ORDER BY event_date DESC
+           LIMIT 1`,
+          [userId],
+        );
+        const lastPeriodDate = latestStart.rows[0]?.date ?? event.date;
+        await client.query(
+          `INSERT INTO cycle_settings (user_id, last_period_date, cycle_length)
+           VALUES ($1, $2::date, 28)
+           ON CONFLICT (user_id) DO UPDATE SET
+             last_period_date = EXCLUDED.last_period_date,
+             updated_at = now()`,
+          [userId, lastPeriodDate],
+        );
+      }
+
+      const cycle = await client.query<CycleRow>(
+        `SELECT last_period_date::text AS "lastPeriodDate",
+                cycle_length::int AS "cycleLength"
+         FROM cycle_settings WHERE user_id = $1`,
+        [userId],
+      );
+      return { event, cycleSettings: cycle.rows[0] ?? null };
     });
   },
 

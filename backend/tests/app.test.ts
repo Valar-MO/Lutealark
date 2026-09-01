@@ -10,6 +10,7 @@ const BREATHING_ID = "934fb086-2917-465b-933f-bbb5a1b96081";
 
 const emptySnapshot: PersonalDataSnapshot = {
   cycleSettings: null,
+  cycleEvents: [],
   dailyCheckins: [],
   breathingRecords: [],
 };
@@ -20,6 +21,7 @@ function makeRepository(
   const repository: PersonalDataRepository = {
     getPersonalData: vi.fn(async () => emptySnapshot),
     upsertCycleSettings: vi.fn(async (_userId, settings) => settings),
+    recordCycleEvent: vi.fn(async (_userId, event) => ({ event, cycleSettings: null })),
     upsertDailyCheckin: vi.fn(async (_userId, checkin) => checkin),
     deleteDailyCheckin: vi.fn(async () => true),
     upsertBreathingRecord: vi.fn(async (_userId, record) => record),
@@ -322,6 +324,7 @@ describe("HTTP responses", () => {
   it("returns the complete personal-data snapshot", async () => {
     const snapshot: PersonalDataSnapshot = {
       cycleSettings: { lastPeriodDate: "2026-08-01", cycleLength: 28 },
+      cycleEvents: [{ date: "2026-08-01", type: "period_start" }],
       dailyCheckins: [{
         date: "2026-08-09",
         energy: 2,

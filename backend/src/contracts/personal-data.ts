@@ -21,12 +21,25 @@ export const breathingRecordSchema = z.object({
   rating: z.number().int().min(1).max(5).nullable(),
 });
 
+export const cycleEventSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "请使用 YYYY-MM-DD 格式"),
+  type: z.enum(["period_start", "period_end", "no_symptom"]),
+});
+
+export const cycleEventMutationResultSchema = z.object({
+  event: cycleEventSchema,
+  cycleSettings: cycleSettingsSchema.nullable(),
+});
+
 export const personalDataSnapshotSchema = z.object({
   cycleSettings: cycleSettingsSchema.nullable(),
+  cycleEvents: z.array(cycleEventSchema).max(30).default([]),
   dailyCheckins: z.array(dailyCheckinSchema).max(30),
   breathingRecords: z.array(breathingRecordSchema).max(30),
 });
 
 export type PersonalDataUserId = z.infer<typeof personalDataUserIdSchema>;
 export type BreathingRecord = z.infer<typeof breathingRecordSchema>;
+export type CycleEvent = z.infer<typeof cycleEventSchema>;
+export type CycleEventMutationResult = z.infer<typeof cycleEventMutationResultSchema>;
 export type PersonalDataSnapshot = z.infer<typeof personalDataSnapshotSchema>;

@@ -9,6 +9,7 @@ import {
   reconnectAgentSession,
   sendAgentMessageWithSessionRetry,
   type CycleResult,
+  type CycleEventRecord,
   type CycleSettings,
   type DailyCheckIn,
 } from './lib/api'
@@ -34,6 +35,7 @@ import {
   getPendingPersonalData,
   hasPendingPersonalData,
   reconcilePersonalDataCollections,
+  recordCycleEvent,
   resetPersonalDataSyncState,
   syncBreathingRecord,
   syncCycleSettings,
@@ -756,6 +758,19 @@ function App() {
     }
   }
 
+  const saveCycleEvent = async (event: CycleEventRecord) => {
+    const subject = currentMutationSubject()
+    if (!subject) return
+    const eventSubjectKey = dataSubjectKey(subject)
+    const eventGeneration = subjectGeneration.current
+    const saved = await recordCycleEvent(event, subject)
+    if (!isCurrentSubjectKey(eventSubjectKey, eventGeneration) || !saved.cycleSettings) return
+    persistCycleSettings(saved.cycleSettings, subject)
+    setCycleSettings(saved.cycleSettings)
+    const result = await calculateCycle(saved.cycleSettings)
+    if (isCurrentSubjectKey(eventSubjectKey, eventGeneration)) setCycleResult(result)
+  }
+
   const saveDailyCheckin = (checkin: DailyCheckIn) => {
     personalDataMutationVersion.current += 1
     const subject = currentMutationSubject()
@@ -1020,6 +1035,7 @@ function App() {
               settings={cycleSettings}
               result={cycleResult}
               onSave={saveCycle}
+              onRecordEvent={saveCycleEvent}
               dailyCheckins={dailyCheckins}
               onSaveDailyCheckin={saveDailyCheckin}
               onDeleteDailyCheckin={deleteDailyCheckinRecord}
@@ -1266,7 +1282,7 @@ export function ChatView(props: {
   )
 }
 
-function CycleView({ settings, result, onSave, dailyCheckins, onSaveDailyCheckin, onDeleteDailyCheckin, focusCheckin, onBack, onOpenTools }: { settings: CycleSettings | null; result: CycleResult | null; onSave: (settings: CycleSettings) => Promise<void>; dailyCheckins: DailyCheckIn[]; onSaveDailyCheckin: (checkin: DailyCheckIn) => void; onDeleteDailyCheckin: (date: string) => Promise<void>; focusCheckin: boolean; onBack: () => void; onOpenTools: () => void }) {
+function CycleView({ settings, result, onSave, onRecordEvent, dailyCheckins, onSaveDailyCheckin, onDeleteDailyCheckin, focusCheckin, onBack, onOpenTools }: { settings: CycleSettings | null; result: CycleResult | null; onSave: (settings: CycleSettings) => Promise<void>; onRecordEvent: (event: CycleEventRecord) => Promise<void>; dailyCheckins: DailyCheckIn[]; onSaveDailyCheckin: (checkin: DailyCheckIn) => void; onDeleteDailyCheckin: (date: string) => Promise<void>; focusCheckin: boolean; onBack: () => void; onOpenTools: () => void }) {
   const today = todayString()
   const [editingCheckinDate, setEditingCheckinDate] = useState(today)
   const [checkinBusyDate, setCheckinBusyDate] = useState('')
@@ -1298,7 +1314,7 @@ function CycleView({ settings, result, onSave, dailyCheckins, onSaveDailyCheckin
   return (
     <section className="cycle-main-surface soft-grid min-h-0 flex-1 overflow-y-auto px-5 py-5 md:px-8">
       <div className="mx-auto max-w-4xl">
-        <CycleDesignPanel settings={settings} result={result} onSave={onSave} />
+        <CycleDesignPanel settings={settings} result={result} onSave={onSave} onRecordEvent={onRecordEvent} />
         <div id="cycle-daily-checkin" tabIndex={-1} className="scroll-mt-4 outline-none">
           <DailyCheckinCard
             key={`${editingCheckinDate}:${JSON.stringify(editingCheckin)}`}
